@@ -16,7 +16,7 @@ UPPERCASE WORDS are (context-sensitive) keywords, which are actually lowercase.
 
 lowercase words are non-terminal.
 
-quoted characters are themselves.
+'quoted characters' are themselves.
 
 ```
 file ::= segment* ; 
@@ -28,10 +28,16 @@ segment ::= SEGMENT label_or_star `{`
 label ::= [A-Za-z_~][A-Za-z0-9_~]* | '"' [^"]+ '"' ;
 label_list ::= label [ ',' label ]* ;
 label_or_star ::= label | '*' ;
-number = '$' [0-9A-F]+ | [0-9]+ | '%' [01][01_]* ;
+number ::= '$' [0-9A-F]+ | [0-9]+ | '%' [01][01_]* ;
 
 
-statement ::= alias_stmt | delete_stmt | strong_stmt | weak_stmt | kind_stmt | loadname_stmt ;
+statement ::= alias_stmt 
+            | delete_stmt
+            | strong_stmt
+            | weak_stmt
+            | kind_stmt
+            | loadname_stmt
+            ;
 
 alias_stmt ::= ALIAS label_list ';' ;
 delete_stmt ::= DELETE ';' ;
@@ -41,8 +47,9 @@ strong_stmt ::= STRONG label_list ';' ;
 weak_stmt ::= WEAK label_list ';' ;
 
 ```
+* '#' starts a comment (terminated by the end of the line).
 
-* segment name comparison is case sensitive.  if there is not a match, the wildcard (`*`) segment, if any, will be used.
+* segment name comparison is case sensitive.  if there is no match, the wildcard (`*`) segment, if any, will be used.
 
 * `alias` will add a public `GLOBAL` entry at the start of the segment. (*c.f.* ORCA/M's `ENTRY` statement)
 
