@@ -64,6 +64,11 @@ unsigned xread_eof(FILE *f, void *data, unsigned n) {
 	return 0;
 }
 
+void xseek(FILE *f, long offset, int whence) {
+	int ok = fseek(f, offset, whence);
+	if (ok < 0) err(1, "fseek");
+}
+
 
 #ifdef __ORCAC__
 #define read16(base, offset) *(unsigned *)(base + offset)
@@ -452,9 +457,9 @@ void process_omf_segment(seg_list *seg) {
 
 	if (delta_header) {
 
-		fseek(outfile, hstart, SEEK_SET);
+		xseek(outfile, hstart, SEEK_SET);
 		xwrite(outfile, header, header_size);
-		fseek(outfile, 0, SEEK_END);
+		xseek(outfile, 0, SEEK_END);
 	}
 
 
@@ -533,9 +538,22 @@ void process_omf_file(void) {
 		}
 		if (!seg) seg = star_segment;
 		if (!seg) {
+			if (flag_v) fputs("  copying\n", stdout);
 			just_copy();
 			continue;
 		}
+
+		if (seg->bits & SEG_DELETE) {
+			uint32_t bytecount = read32(header, 0) - header_size;
+
+			if (flag_v) fputs("  deleting\n", stdout);
+
+			xseek(infile, bytecount, SEEK_CUR);
+			continue;
+		}
+
+
+		if (flag_v) fputs("  updating\n", stdout);
 		clear_ht();
 		prep_ht(seg, 0);
 		process_omf_segment(seg);
