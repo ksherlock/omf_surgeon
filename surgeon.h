@@ -10,7 +10,7 @@ enum {
 	MAKE_WEAK = 0x20,
 	MAKE_ENTRY = 0x40,
 
-	IS_STAR = 0x8000, 
+	IS_STAR = 0x4000, 
 };
 
 enum {
@@ -42,7 +42,8 @@ typedef struct seg_list {
 	struct name_list *weak;
 	unsigned bits;
 	unsigned kind;
-	char *loadname;
+
+	char loadname[12]; // actually 10 bytes but we 0-terminate, +1 for padding.
 
 	char name[];
 } seg_list;

@@ -222,7 +222,7 @@ void prep_ht(struct seg_list *seg, unsigned star) {
 static char name[64];
 
 // returns the size of the expression.
-unsigned process_expr(uint8_t *expr) {
+unsigned process_omf_expr(uint8_t *expr) {
 
 	unsigned op;
 	unsigned sz = 0;
@@ -322,7 +322,7 @@ void process_omf_segment(seg_list *seg) {
 	// unsigned kind = read16(header, o_kind);
 	if (seg->bits & SEG_KIND)
 		write16(header, o_kind, seg->kind);
-	if (seg->loadname) {
+	if (seg->bits & SEG_LOADNAME) {
 		unsigned disp_name = read16(header, o_displacement_name);
 		memcpy(header + disp_name, seg->loadname, 10);
 	}
@@ -412,7 +412,7 @@ void process_omf_segment(seg_list *seg) {
 			// warn if weak?
 			offset += readstr(NULL, body + offset);
 			offset += 4;
-			offset += process_expr(body + offset);
+			offset += process_omf_expr(body + offset);
 			break;
 
 		case 0xeb: // expr
@@ -420,12 +420,12 @@ void process_omf_segment(seg_list *seg) {
 		case 0xed: // bkexpr
 		case 0xf3: // lexpr
 			offset += 1;
-			offset += process_expr(body + offset);
+			offset += process_omf_expr(body + offset);
 			break;
 
 		case 0xee: //relexpr
 			offset += 5;
-			offset += process_expr(body + offset);
+			offset += process_omf_expr(body + offset);
 			break;
 
 		case 0xf2: // lconst

@@ -286,15 +286,15 @@ struct seg_list *parse_file(FILE *f) {
 			}
 
 			if (tk == TK_LOADNAME) {
+
+				seg->bits |= SEG_LOADNAME;
 				expect_token(f, 2, TK_LABEL, "label or string");
 				if (label_length > 10) warnx("line %u: loadname should be <= 10 chars", line);
 				for (unsigned i = label_length; i < 10; ++i) {
 					label[i] = ' ';
 				}
-				label[10] = 0;
-				char *cp = seg->loadname;
-				if (!cp) seg->loadname = cp = xmalloc(11);
-				memcpy(cp, label, 11);
+				memcpy(seg->loadname, label, 10);
+				seg->loadname[10] = 0;
 				expect_token(f, 0, TK_SEMI, 0);
 				continue;
 			}
