@@ -183,29 +183,33 @@ void prep_ht(struct seg_list *seg, unsigned star) {
 
 	star = star ? IS_STAR : 0;
 
-	ptr = seg->strong;
-	while (ptr) {
-		e = lookup(ptr->name, 1);
-		unsigned bits = e->bits;
-		bits |= star;
-		if ((bits & IS_STAR) != star) bits =0;
-		bits |= MAKE_STRONG;
-		e->bits = bits;
-		ptr = ptr->next;
-	}
-
+	// strong > weak so do weak first, then overwrite w/ strong.
 	ptr = seg->weak;
 	while (ptr) {
 		e = lookup(ptr->name, 1);
 		unsigned bits = e->bits;
 		bits |= star;
-		if ((bits & IS_STAR) != star) bits =0;
+		if ((bits & IS_STAR) != star) bits = 0;
 
-		if (!(bits & MAKE_STRONG)) {
-			bits |= MAKE_WEAK;
-		}
+		bits |= MAKE_WEAK;
+		e->bits = bits;
 		ptr = ptr->next;
 	}
+
+	ptr = seg->strong;
+	while (ptr) {
+		e = lookup(ptr->name, 1);
+		unsigned bits = e->bits;
+		bits |= star;
+		if ((bits & IS_STAR) != star) bits = 0;
+
+		bits &= ~MAKE_WEAK;
+		bits |= MAKE_STRONG;
+		e->bits = bits;
+		ptr = ptr->next;
+	}
+
+
 
 	// add entries as well, in case they're also strong/weak?
 
