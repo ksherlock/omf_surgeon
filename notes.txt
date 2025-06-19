@@ -1,0 +1,59 @@
+
+segment ""
+	alias "" # add an alias
+	strong "" # add a strong reference to a symbol
+	debug "" # add debug name
+
+
+1. parse script file
+2. build segment array:
+struct ss {
+	ss *next;
+	char *debug;
+	slist *alias;
+	slist *strong
+}; 
+
+
+# this is a comment
+# format is
+# name ':' # operate on this segment
+# +label # make label strong
+# -label # make label weak
+# @label # make an alias (entry)
+
+
+# what is strong?
+if there are already $83 or $e5 references, do nothing.
+if there are only $82 references, convert them to $83.
+if there are no references, add an $e5
+
+# what is weak?
+convert all $83 to $82
+if no $83 references, do nothing.
+
+# what is an alias?
+add a global ($e6) entry at the beginning of the segment.
+
+
+SEGMENT label {
+  ALIAS label
+  ALIAS label=label
+  STRONG label
+  WEAK label
+
+
+}
+
+
+-----
+
+linker idea -
+
+scan for all '__' .* '_ctor' functions, auto-generate a __ctor function, eg
+
+__ctor start
+	jsl xxxxxx
+	rtl
+
+crt has soft reference, calls before main if present.

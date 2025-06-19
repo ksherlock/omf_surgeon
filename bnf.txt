@@ -1,0 +1,28 @@
+
+SEGMENT label_or_star '{' segment_directive  * '}' ;
+
+segment_directive = 
+	  TYPE CODE|DATA ';' -- not currently handled
+	| STRONG label_list ';'
+	| WEAK label_list ';'
+	| ALIAS label_list ';'
+	;
+
+label_or_star = '*' | label ;
+label = 
+	  [A-Za-z_~][A-Zaz_~0-9]* 
+	| '"' [^"\r\n]+ '"'
+	;
+
+label_list = 
+	  label
+	| label_list ',' label
+	;
+
+
+
+future verbs:
+
+DELETE ';'' # delete the segment
+LOADNAME label ';' # sets the loadname (empty strings would be allowed here.
+KIND number ';' # set the OMF kind bits
