@@ -45,15 +45,24 @@ void *xmalloc(unsigned size) {
 
 
 unsigned xwrite(FILE *f, const void *data, unsigned n) {
-	if (fwrite(data, 1, n, f) != n) errx(1, "fwrite");
+	unsigned nn = fwrite(data, 1, n, f);
+	if (nn != n) errx(1, "fwrite");
 	return n;
 }
 
 unsigned xread(FILE *f, void *data, unsigned n) {
-	if (fread(data, 1, n, f) != n) errx(1, "fread");
+	unsigned nn = fread(data, 1, n, f);
+	if (nn != n) errx(1, "fread");
 	return n;
 }
 
+
+unsigned xread_eof(FILE *f, void *data, unsigned n) {
+	unsigned nn = fread(data, 1, n, f);
+	if (nn == 0 || nn == n) return nn;
+	errx(1, "fread");
+	return 0;
+}
 
 
 #ifdef __ORCAC__
@@ -112,6 +121,7 @@ unsigned hash(const char *str) {
 	unsigned n = 5381;
 	for (unsigned i = 0; ; ++i) {
 		unsigned c = str[i];
+		if (!c) break;
 		n = (n << 5) + n + c; /* n = n * 33 + c */
 	}
 	return n;
@@ -286,6 +296,7 @@ void process_omf_segment(seg_list *seg) {
 	unsigned delta_header = 0;
 
 	if (bytecount > 0xc000) errx(EX_DATAERR, "omf segment too big");
+	bytecount -= header_size;
 
 	if (bytecount <= 512) {
 		xread(infile, buffer, bytecount);
@@ -307,16 +318,19 @@ void process_omf_segment(seg_list *seg) {
 	ptr = seg->alias;
 	while (ptr) {
 		e = lookup(ptr->name, 1);
-		e->bits |= IS_STRONG; // << need a new flag so we can tell if defined?
+		// check for a self-alias? if (e->bits & IS_DEFINED)
+		e->bits |= IS_STRONG;
 		unsigned n = strlen(ptr->name);
 		scratch[0] = 0xe6;
-		scratch[1] = 0;
-		scratch[2] = 0;
-		scratch[3] = 'N';
-		scratch[4] = 0;
-		scratch[5] = n;
-		memcpy(scratch + 6, ptr->name, n);
-		newSize += xwrite(outfile, scratch, 6 + n);
+		scratch[1] = n;
+		memcpy(scratch + 2, ptr->name, n);
+		n += 2;
+		scratch[n++] = 0;
+		scratch[n++] = 0;
+		scratch[n++] = 'N';
+		scratch[n++] = 0;
+
+		newSize += xwrite(outfile, scratch, n);
 
 		ptr = ptr->next;
 	}
@@ -370,6 +384,7 @@ void process_omf_segment(seg_list *seg) {
 		case 0xe6: // global
 		case 0xef: // local [???]
 			offset += readstr(name, body + offset);
+			offset += 4;
 			e = lookup(name, 1);
 			e->bits |= IS_DEFINED;
 			break;
@@ -429,6 +444,7 @@ void process_omf_segment(seg_list *seg) {
 	// flush it. update the header
 
 	if (newSize != bytecount) {
+		newSize += header_size;
 		write32(header, 0, newSize);
 		delta_header = 1;
 	}
@@ -473,7 +489,7 @@ void just_copy(void) {
 
 	xwrite(outfile, header, header_size);
 
-	uint32_t bytecount = read32(header, 0);
+	uint32_t bytecount = read32(header, 0) - header_size;
 	while (bytecount) {
 		unsigned n = 512;
 		if (bytecount < n) n = bytecount;
@@ -490,8 +506,8 @@ void process_omf_file(void) {
 
 	for(;;) {
 
-
-		xread(infile, header, 0x2c);
+		unsigned n = xread_eof(infile, header, 0x2c);
+		if (n == 0) return; // eof.
 
 		if (header[o_version] != 2 || header[o_number_sex != 0]
 			|| header[o_number_length] != 4 || header[o_label_length] != 0) {

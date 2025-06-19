@@ -106,12 +106,14 @@ int next_token(FILE *f, unsigned st) {
 				if (isalpha(c) || isdigit(c) || c == '_' || c == '~') {
 					label[i++] = c;
 					if (i >= 63) parse_err("label too long");
+					continue;
 				}
-				ix--;
-				label[i] = 0;
-				label_length = i;
-				return st ? is_keyword(label) : TK_LABEL;
+				break;
 			}
+			ix--;
+			label[i] = 0;
+			label_length = i;
+			return st ? is_keyword(label) : TK_LABEL;
 		}
 
 		parse_err("bad char");
@@ -132,7 +134,7 @@ int expect(FILE *f, unsigned st, int type, const char *what) {
 
 struct seg_list *parse_file(FILE *f) {
 
-	line = 1;
+	line = 0;
 	ix = 0;
 	buffer[0] = 0;
 
