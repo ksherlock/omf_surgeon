@@ -6,6 +6,7 @@ segment_directive =
 	| STRONG label_list ';'
 	| WEAK label_list ';'
 	| ALIAS label_list ';'
+	| DELETE ';'
 	;
 
 label_or_star = '*' | label ;

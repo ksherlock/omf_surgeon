@@ -13,6 +13,9 @@ enum {
 	IS_STAR = 0x8000, 
 };
 
+enum {
+	SEG_DELETE = 1
+};
 
 
 typedef struct hash_entry {
@@ -36,6 +39,7 @@ typedef struct seg_list {
 	struct name_list *alias;
 	struct name_list *strong;
 	struct name_list *weak;
+	unsigned bits;
 	char name[];
 } seg_list;
 

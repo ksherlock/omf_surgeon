@@ -26,9 +26,15 @@ enum {
 	TK_SEGMENT,
 	TK_WEAK,
 	TK_ALIAS,
+	TK_DELETE
 	// TK_TYPE,
 	// TK_CODE,
 	// TK_DATA
+};
+
+
+static const char *token_names[] = {
+	"eof", ";", ",", "*", "{", "}", "label", "strong", "segment", "weak", "alias", "delete"
 };
 
 
@@ -38,6 +44,7 @@ int is_keyword(const char *cp) {
 	if (c == 's' && !strcmp(cp, "segment")) return TK_SEGMENT;
 	if (c == 'w' && !strcmp(cp, "weak")) return TK_WEAK;
 	if (c == 'a' && !strcmp(cp, "alias")) return TK_ALIAS;
+	if (c == 'd' && !strcmp(cp, "delete")) return TK_DELETE;
 	// if (c == 't' && !strcmp(cp, "type")) return TK_TYPE;
 	// if (c == 'c' && !strcmp(cp, "code")) return TK_CODE;
 	// if (c == 'd' && !strcmp(cp, "data")) return TK_DATA;
@@ -50,9 +57,13 @@ int refill(FILE *f) {
 	for(;;) {
 		char *cp = fgets(buffer, sizeof(buffer)-1, f);
 		++line;
+		ix = 0;
 		buffer[255] = 0;
 		if (!cp) {
-			if (ferror(f)) return -1;
+			if (ferror(f)) {
+				err(1, "line %u: read error", line);
+				// return -1;
+			}
 			if (feof(f)) return 0;
 		}
 		return 1;
@@ -71,8 +82,7 @@ int next_token(FILE *f, unsigned st) {
 		unsigned c = buffer[ix++];
 		if (c == 0 || c == '#') {
 			int ok = refill(f);
-			if (ok <= 0) return ok;
-			ix = 0;
+			if (ok == 0) return ok;
 			continue;
 		}
 		if (isspace(c)) continue;
@@ -84,6 +94,7 @@ int next_token(FILE *f, unsigned st) {
 		if (c == ';') return TK_SEMI;
 
 		if (c == '"') {
+			// for segname, an empty string would actually be ok...
 			unsigned i = 0;
 			for(;;) {
 				c = buffer[ix++];
@@ -116,18 +127,23 @@ int next_token(FILE *f, unsigned st) {
 			return st ? is_keyword(label) : TK_LABEL;
 		}
 
-		parse_err("bad char");
+		// parse_err("bad char");
+		errx(1, "line %u: unexpected character '%c'", line, c);
 	}
 }
 
-void expected(const char *what) {
-	errx(1, "line %u: expected %s", line, what);
+void expected(int tk, const char *what) {
+	errx(1, "line %u: expected %s (found %s)", line, what, token_names[tk]);
 }
 
-int expect(FILE *f, unsigned st, int type, const char *what) {
+int expect_token(FILE *f, unsigned st, int type, const char *what) {
 	int tk = next_token(f, st);
 	if (tk == type) return tk;
-	errx(1, "line %u: expected %s", line, what);
+	errx(1, "line %u: expected %s (found %s)",
+		line,
+		what ? what : token_names[type],
+		token_names[tk]
+	);
 }
 
 
@@ -151,13 +167,13 @@ struct seg_list *parse_file(FILE *f) {
 		if (tk == TK_SEMI) continue; // optional ; after }
 		if (tk == TK_EOF) break; // eof
 
-		if (tk != TK_SEGMENT) expected("segment or eof");
+		if (tk != TK_SEGMENT) expected(tk, "segment or eof");
 
 		tk = next_token(f, 0);
-		if (tk != TK_STAR && tk != TK_LABEL) expected("label");
+		if (tk != TK_STAR && tk != TK_LABEL) expected(tk, "label");
 		type = tk;
 
-		expect(f, 0, TK_LEFT_BRACKET, "{");
+		expect_token(f, 0, TK_LEFT_BRACKET, "{");
 
 		seg_list *seg = 0;
 		switch (type) {
@@ -202,15 +218,23 @@ struct seg_list *parse_file(FILE *f) {
 			case TK_STRONG: head = seg->strong; break;
 			case TK_WEAK: head = seg->weak; break;
 			case TK_ALIAS: head = seg->alias; break;
+			case TK_DELETE: break;
 			default:
-				expected("strong/weak/alias");
+				expected(tk, "strong/weak/alias/delete");
 			}
+
+			if (tk == TK_DELETE) {
+				seg->bits |= SEG_DELETE;
+				expect_token(f, 0, TK_SEMI, ";");
+				continue;
+			}
+
 
 			// list of labels;
 
 			for(;;) {
 
-				expect(f, 0, TK_LABEL, "label");
+				expect_token(f, 0, TK_LABEL, "label");
 				// add to the list...
 
 				name_list *e = xmalloc(sizeof(name_list) + 1 + label_length);
@@ -222,7 +246,7 @@ struct seg_list *parse_file(FILE *f) {
 				tk = next_token(f, 0);
 				if (tk == TK_SEMI) break;
 				if (tk == TK_COMMA) continue;
-				expected(", or ;");
+				expected(tk, ", or ;");
 			}
 
 			switch(saved) {
