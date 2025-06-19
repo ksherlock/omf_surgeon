@@ -153,18 +153,37 @@ int next_token(FILE *f, unsigned st) {
 		}
 
 		if (c == '$') {
+			unsigned len = 0;
 			value = 0;
 			while (isxdigit(c = buffer[ix++])) {
 				if (isdigit(c)) c &= 0x0f;
 				else c = (c & 0x0f) + 9;
 				value = (value << 4) | c;
+				++len;
 			}
 			--ix;
+			if (!len) parse_err("invalid hex number");
+			return TK_NUMBER;
+		}
+
+		if (c == '%') {
+			unsigned len = 0;
+			value = 0;
+			for(;;) {
+				c = buffer[ix++];
+				if (c == '_') continue;
+				if (c < '0' || c > '1') break;
+				c &= 1;
+				value = (value << 1) | c;
+				++len;
+			}
+			--ix;
+			if (!len) parse_err("invalid binary number");
 			return TK_NUMBER;
 		}
 
 		if (isdigit(c)) {
-			value = 0;
+			value = c & 0x0f;
 			while (isdigit(c = buffer[ix++])) {
 				value = value * 10 + (c & 0x0f);
 			}
