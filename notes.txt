@@ -57,3 +57,21 @@ __ctor start
 	rtl
 
 crt has soft reference, calls before main if present.
+
+
+----
+
+
+the original idea was to add an init segment to an existing (non-object) omf file.
+for things like patches.
+
+import "omf_file" {
+	label = expression ';'	
+}
+where expression is something like seg(1) [+ offset]
+
+
+this would need to resolve expressions, build relocation records, update the expressload header...
+
+
+
