@@ -14,14 +14,15 @@ enum {
 };
 
 enum {
-	SEG_DELETE = 1
+	SEG_DELETE = 1,
+	SEG_KIND = 2,
+	SEG_LOADNAME = 4,
 };
 
 
 typedef struct hash_entry {
 	struct hash_entry *next;
 	unsigned hash_value;
-
 	unsigned bits;
 
 	char name[];
@@ -40,6 +41,9 @@ typedef struct seg_list {
 	struct name_list *strong;
 	struct name_list *weak;
 	unsigned bits;
+	unsigned kind;
+	char *loadname;
+
 	char name[];
 } seg_list;
 

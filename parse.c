@@ -12,6 +12,7 @@ static char label[64];
 static unsigned label_length;
 static unsigned ix;
 static unsigned line;
+static unsigned value;
 
 enum {
 	TK_EOF = 0,
@@ -22,11 +23,14 @@ enum {
 	TK_RIGHT_BRACKET,
 
 	TK_LABEL,
+	TK_NUMBER,
 	TK_STRONG,
 	TK_SEGMENT,
 	TK_WEAK,
 	TK_ALIAS,
-	TK_DELETE
+	TK_DELETE,
+	TK_KIND,
+	TK_LOADNAME
 	// TK_TYPE,
 	// TK_CODE,
 	// TK_DATA
@@ -34,20 +38,39 @@ enum {
 
 
 static const char *token_names[] = {
-	"eof", ";", ",", "*", "{", "}", "label", "strong", "segment", "weak", "alias", "delete"
+	"eof", ";", ",", "*", "{", "}",
+	"label", "number", "strong", "segment", "weak", "alias", "delete", "kind", "loadname"
 };
 
 
 int is_keyword(const char *cp) {
+
+#define _(a, str, tk) \
+	if (c == a && n == sizeof(str)-1 && !strcmp(cp, str)) return tk
+
 	unsigned c = *cp;
+	unsigned n = strlen(cp);
+
+	_('s', "strong", TK_STRONG);
+	_('s', "segment", TK_SEGMENT);
+	_('w', "weak", TK_WEAK);
+	_('a', "alias", TK_ALIAS);
+	_('d', "delete", TK_DELETE);
+	_('k', "kind", TK_KIND);
+	_('l', "loadname", TK_LOADNAME);
+
+#if 0
 	if (c == 's' && !strcmp(cp, "strong")) return TK_STRONG;
 	if (c == 's' && !strcmp(cp, "segment")) return TK_SEGMENT;
 	if (c == 'w' && !strcmp(cp, "weak")) return TK_WEAK;
 	if (c == 'a' && !strcmp(cp, "alias")) return TK_ALIAS;
 	if (c == 'd' && !strcmp(cp, "delete")) return TK_DELETE;
+	if (c == 'k' && !strcmp(cp, "kind")) return TK_KIND;
+	if (c == 'k')
 	// if (c == 't' && !strcmp(cp, "type")) return TK_TYPE;
 	// if (c == 'c' && !strcmp(cp, "code")) return TK_CODE;
 	// if (c == 'd' && !strcmp(cp, "data")) return TK_DATA;
+#endif
 	return TK_LABEL;
 }
 
@@ -74,8 +97,10 @@ void parse_err(const char *what) {
 	errx(1, "line %u: %s", line, what);
 }
 
+// st values:
+// 1 - convert labels to keywords
+// 2 - empty string allowed.
 int next_token(FILE *f, unsigned st) {
-
 
 	for(;;) {
 
@@ -100,7 +125,7 @@ int next_token(FILE *f, unsigned st) {
 				c = buffer[ix++];
 				if (c < 0x20) parse_err("bad label");
 				if (c == '"') {
-					if (i == 0) parse_err("empty label");
+					if (i == 0 && st != 2) parse_err("empty label");
 					label[i] = 0;
 					label_length = i;
 					return TK_LABEL;
@@ -124,7 +149,27 @@ int next_token(FILE *f, unsigned st) {
 			ix--;
 			label[i] = 0;
 			label_length = i;
-			return st ? is_keyword(label) : TK_LABEL;
+			return st == 1 ? is_keyword(label) : TK_LABEL;
+		}
+
+		if (c == '$') {
+			value = 0;
+			while (isxdigit(c = buffer[ix++])) {
+				if (isdigit(c)) c &= 0x0f;
+				else c = (c & 0x0f) + 9;
+				value = (value << 4) | c;
+			}
+			--ix;
+			return TK_NUMBER;
+		}
+
+		if (isdigit(c)) {
+			value = 0;
+			while (isdigit(c = buffer[ix++])) {
+				value = value * 10 + (c & 0x0f);
+			}
+			--ix;
+			return TK_NUMBER;
 		}
 
 		// parse_err("bad char");
@@ -173,7 +218,7 @@ struct seg_list *parse_file(FILE *f) {
 		if (tk != TK_STAR && tk != TK_LABEL) expected(tk, "label");
 		type = tk;
 
-		expect_token(f, 0, TK_LEFT_BRACKET, "{");
+		expect_token(f, 0, TK_LEFT_BRACKET, 0);
 
 		seg_list *seg = 0;
 		switch (type) {
@@ -218,14 +263,39 @@ struct seg_list *parse_file(FILE *f) {
 			case TK_STRONG: head = seg->strong; break;
 			case TK_WEAK: head = seg->weak; break;
 			case TK_ALIAS: head = seg->alias; break;
-			case TK_DELETE: break;
+			case TK_DELETE:
+			case TK_KIND:
+			case TK_LOADNAME:
+				break;
 			default:
 				expected(tk, "strong/weak/alias/delete");
 			}
 
 			if (tk == TK_DELETE) {
 				seg->bits |= SEG_DELETE;
-				expect_token(f, 0, TK_SEMI, ";");
+				expect_token(f, 0, TK_SEMI, 0);
+				continue;
+			}
+
+			if (tk == TK_KIND) {
+				seg->bits |= SEG_KIND;
+				expect_token(f, 0, TK_NUMBER, 0);
+				seg->kind = value;
+				expect_token(f, 0, TK_SEMI, 0);
+				continue;
+			}
+
+			if (tk == TK_LOADNAME) {
+				expect_token(f, 2, TK_LABEL, "label or string");
+				if (label_length > 10) warnx("line %u: loadname should be <= 10 chars", line);
+				for (unsigned i = label_length; i < 10; ++i) {
+					label[i] = ' ';
+				}
+				label[10] = 0;
+				char *cp = seg->loadname;
+				if (!cp) seg->loadname = cp = xmalloc(11);
+				memcpy(cp, label, 11);
+				expect_token(f, 0, TK_SEMI, 0);
 				continue;
 			}
 
@@ -234,7 +304,7 @@ struct seg_list *parse_file(FILE *f) {
 
 			for(;;) {
 
-				expect_token(f, 0, TK_LABEL, "label");
+				expect_token(f, 0, TK_LABEL, 0);
 				// add to the list...
 
 				name_list *e = xmalloc(sizeof(name_list) + 1 + label_length);

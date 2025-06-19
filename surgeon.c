@@ -316,8 +316,16 @@ void process_omf_segment(seg_list *seg) {
 		xread(infile, body, bytecount);
 	}
 
-	// todo -- update kind, loadname
+	// update kind, loadname
 
+
+	// unsigned kind = read16(header, o_kind);
+	if (seg->bits & SEG_KIND)
+		write16(header, o_kind, seg->kind);
+	if (seg->loadname) {
+		unsigned disp_name = read16(header, o_displacement_name);
+		memcpy(header + disp_name, seg->loadname, 10);
+	}
 
 	// store file offset, copy omf header
 	unsigned long hstart = ftell(outfile);
@@ -526,7 +534,7 @@ void process_omf_file(void) {
 
 		unsigned disp_name = read16(header, o_displacement_name);
 		unsigned disp_data = read16(header, o_displacement_data);
-		unsigned kind = read16(header, o_kind);
+		// unsigned kind = read16(header, o_kind);
 
 		header_size = disp_data;
 		xread(infile, header + 0x2c, disp_data - 0x2c);
