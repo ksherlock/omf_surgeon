@@ -591,9 +591,70 @@ void process_omf_file(void) {
 
 void usage(unsigned ex) {
 
-	fputs("omfsurgeon [-hv] scriptfile infile outfile\n", stdout);
+	fputs(
+		"omfsurgeon [-hv] scriptfile infile outfile\n"
+		"  -h: show help\n"
+		"  -v: be verbose\n"
+		, stdout);
 	exit(ex);
 }
+
+#ifdef __ORCAC__
+#include <gsos.h>
+
+static FileInfoRecGS infoDCB = { 4 };
+
+/* ideally we would just read the info when opening, set it when creating... */
+void get_file_type(const char *path, unsigned *ftype, unsigned long *atype) {
+
+	GSString255Ptr gs = (GSString255Ptr)buffer;
+
+	unsigned l = strlen(path);
+
+	if (l+2 > sizeof(buffer)) {
+		gs = xmalloc(l + 2);
+	}
+	gs->length = l;
+	memcpy(gs->text, path, l);
+
+	infoDCB.pathname = gs;
+	GetFileInfoGS(&infoDCB);
+	if (_toolErr) {
+		errx(1, "GetFileInfoGS(%s): $%04x", path, _toolErr);
+	}
+	*ftype = infoDCB.fileType;
+	*atype = infoDCB.auxType;
+
+	if ((char *)gs != buffer) free(gs);
+}
+
+void set_file_type(const char *path, unsigned ftype, unsigned long atype) {
+
+	GSString255Ptr gs = (GSString255Ptr)buffer;
+
+	unsigned l = strlen(path);
+
+	if (l+2 > sizeof(buffer)) {
+		gs = xmalloc(l + 2);
+	}
+	gs->length = l;
+	memcpy(gs->text, path, l);
+
+	infoDCB.pathname = gs;
+	infoDCB.fileType = ftype;
+	infoDCB.auxType = atype;
+
+	SetFileInfoGS(&infoDCB);
+	if (_toolErr) {
+		errx(1, "SetFileInfoGS(%s): $%04x", path, _toolErr);
+	}
+
+	if ((char *)gs != buffer) free(gs);
+}
+
+
+
+#endif
 
 int main(int argc, char **argv) {
 
@@ -635,15 +696,37 @@ int main(int argc, char **argv) {
 	segments = seg;
 
 
-	// iigs - check file type.
-
 	cp = argv[1];
+
+	#ifdef __ORCAC__
+	// iigs - check file type.
+	unsigned ftype;
+	unsigned long atype;
+	get_file_type(cp, &ftype, &atype);
+	/*
+	 * $b1: object file
+	 * $b2: library file
+	 * $b3-$be: load files.
+	 *
+	 * in the future, $b3-$be may be supported for adding a stack segment or adding an init segment.
+	 */
+
+	if (ftype != 0xb1)
+		errx(EX_DATAERR, "%s: not an OMF object file", cp);
+
+	#endif
+
+
 	infile = fopen(argv[1], "rb");
 	if (!infile) err(EX_NOINPUT, "fopen %s", cp);
 
 	cp = argv[2];
 	outfile = fopen(cp, "wb");
 	if (!outfile) err(EX_NOINPUT, "fopen %s", cp);
+
+	#ifdef __ORCAC__
+	set_file_type(cp, ftype, atype);
+	#endif
 
 	process_omf_file();
 
