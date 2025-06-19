@@ -149,6 +149,7 @@ struct hash_entry *lookup(const char *name, unsigned insert) {
 		e->hash_value = hash_value;
 		e->bits = 0;
 		memcpy(e->name, name, n+1);
+		hash_table[ix] = e;
 	}
 
 	return e;
@@ -535,6 +536,8 @@ void process_omf_file(void) {
 			just_copy();
 			continue;
 		}
+		clear_ht();
+		prep_ht(seg, 0);
 		process_omf_segment(seg);
 
 		#if 0
