@@ -137,8 +137,8 @@ int next_token(FILE *f, unsigned st) {
 		if (isalpha(c) || c == '~' || c == '_' ) {
 			unsigned i = 1;
 			label[0] = c;
-			for(;;) {
-				c = buffer[ix++];
+			for(;;++ix) {
+				c = buffer[ix];
 				if (isalpha(c) || isdigit(c) || c == '_' || c == '~') {
 					label[i++] = c;
 					if (i >= 63) parse_err("label too long");
@@ -146,7 +146,6 @@ int next_token(FILE *f, unsigned st) {
 				}
 				break;
 			}
-			ix--;
 			label[i] = 0;
 			label_length = i;
 			return st == 1 ? is_keyword(label) : TK_LABEL;
@@ -155,13 +154,13 @@ int next_token(FILE *f, unsigned st) {
 		if (c == '$') {
 			unsigned len = 0;
 			value = 0;
-			while (isxdigit(c = buffer[ix++])) {
+			while (isxdigit(c = buffer[ix])) {
+				++ix;
 				if (isdigit(c)) c &= 0x0f;
 				else c = (c & 0x0f) + 9;
 				value = (value << 4) | c;
 				++len;
 			}
-			--ix;
 			if (!len) parse_err("invalid hex number");
 			return TK_NUMBER;
 		}
@@ -169,25 +168,24 @@ int next_token(FILE *f, unsigned st) {
 		if (c == '%') {
 			unsigned len = 0;
 			value = 0;
-			for(;;) {
-				c = buffer[ix++];
+			for(;;++ix) {
+				c = buffer[ix];
 				if (c == '_') continue;
 				if (c < '0' || c > '1') break;
 				c &= 1;
 				value = (value << 1) | c;
 				++len;
 			}
-			--ix;
 			if (!len) parse_err("invalid binary number");
 			return TK_NUMBER;
 		}
 
 		if (isdigit(c)) {
 			value = c & 0x0f;
-			while (isdigit(c = buffer[ix++])) {
+			while (isdigit(c = buffer[ix])) {
+				++ix;
 				value = value * 10 + (c & 0x0f);
 			}
-			--ix;
 			return TK_NUMBER;
 		}
 
