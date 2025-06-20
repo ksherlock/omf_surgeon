@@ -58,3 +58,31 @@ number        ::= '$' [0-9A-F]+ | '%' [01][01_]* | [0-9]+  ;
 
 * `loadname` will set the segment header loadname field (padded with ' ' to 10 characters).
 
+
+
+Examples:
+
+```
+# this will delete all segments (outfile will be empty).
+
+segment * {
+  delete;
+}
+
+```
+
+```
+# this will mark the segment as code, static, private ($4000), reload ($0400)
+
+segment "~GLOBALS" {
+  kind $4400;
+}
+```
+
+
+```
+# bcmp will be added as an alias for memcmp.
+segment "memcmp" {
+  alias bcmp;
+}
+```
