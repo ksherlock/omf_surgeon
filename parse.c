@@ -195,13 +195,13 @@ int next_token(FILE *f, unsigned st) {
 }
 
 void expected(int tk, const char *what) {
-	errx(1, "line %u: expected %s (found %s)", line, what, token_names[tk]);
+	errx(1, "line %u: expected %s found %s", line, what, token_names[tk]);
 }
 
 int expect_token(FILE *f, unsigned st, int type, const char *what) {
 	int tk = next_token(f, st);
 	if (tk == type) return tk;
-	errx(1, "line %u: expected %s (found %s)",
+	errx(1, "line %u: expected %s found %s",
 		line,
 		what ? what : token_names[type],
 		token_names[tk]
