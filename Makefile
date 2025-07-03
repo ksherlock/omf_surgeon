@@ -9,3 +9,4 @@ parse.o : parse.c surgeon.h
 .PHONY: clean
 clean:
 	$(RM) omf_surgeon surgeon.o parse.o
+
