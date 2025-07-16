@@ -12,8 +12,10 @@
 #include "read.h"
 
 
-unsigned current_seg = 0;
-unsigned current_pc = 0;
+unsigned current_pc;
+unsigned current_seg_offset;
+unsigned patch_seg;
+
 
 
 void usage(int ex) {
@@ -71,7 +73,7 @@ typedef struct expr_list {
 	unsigned type; // expr, bkexpr, etc
 	unsigned size;
 	unsigned offset;
-	unsigned org; // for rel_expr
+	unsigned disp; // displacement for rel_expr
 	unsigned level;
 	uint8_t expr[]; // packed rpn expression.
 } expr_list;
@@ -263,16 +265,15 @@ int eval_expr(const uint8_t *expr, struct reloc *r, int level) {
 			case EXPR_PC:
 				// not used by orca/m?
 				a = &r_stack[s++];
-				a->seg = current_seg;
+				a->seg = patch_seg;
 				a->shift = 0;
 				a->offset = current_pc;
 				break;
 			case EXPR_REL:
 				a = &r_stack[s++];
-				a->seg = current_seg;
+				a->seg = patch_seg;
 				a->shift = 0;
-				a->offset = read32(expr, offset); 
-				// todo - this needs to be adjusted by the current seg offset.
+				a->offset = read32(expr, offset) + current_seg_offset; 
 				offset += 4;
 				break;
 
@@ -303,12 +304,13 @@ int eval_expr(const uint8_t *expr, struct reloc *r, int level) {
 	return offset;
 }
 
-int expr_size(const uint8_t *expr) {
+int expr_size(uint8_t *expr) {
 
 	unsigned op;
 	unsigned offset = 0;
 
 	for(;;) {
+		uint32_t x;
 		op = expr[offset++];
 		if (op == EXPR_END) break;
 		if (op < 0x16) continue;
@@ -318,8 +320,10 @@ int expr_size(const uint8_t *expr) {
 			case EXPR_PC:
 				break;
 			case EXPR_REL:
-				// todo - this needs to be adjusted by the current seg offset.
-
+				// this needs to be adjusted by the current seg offset.
+				x = read32(expr, offset);
+				write32(expr, offset, x + current_seg_offset);
+				offset += 4;
 			case EXPR_ABS:
 				offset += 4;
 				break;
@@ -347,6 +351,7 @@ void upcase_name(void) {
 void copy_segments(FILE *infile, FILE *outfile) {
 
 
+	unsigned segnum = 0;
 	for(;;) {
 		unsigned n = xread_eof(infile, header, 0x2c);
 		if (!n) break;
@@ -367,7 +372,7 @@ void copy_segments(FILE *infile, FILE *outfile) {
 
 		readstr(name, header + disp_name + 10); // disp_name is to the 10-char loadname.
 
-		unsigned segnum = read16(header, o_segment_number);
+		segnum = read16(header, o_segment_number);
 
 		// grr... omf v1 uses block count, but the last segment may be a partial block.
 
@@ -426,6 +431,8 @@ void copy_segments(FILE *infile, FILE *outfile) {
 
 		// copy to output file...
 	}
+	if (segnum == 0) errx(1,"bad omf file");
+	patch_seg = segnum + 1;
 }
 
 
@@ -478,7 +485,9 @@ void process_patch(FILE *infile, FILE *outfile) {
 
 	// insert seg name into symbol table...
 
-	// seg = new segnum....
+	current_seg_offset = 0;
+	current_pc = 0;
+
 	for (unsigned level = 1;;++level) {
 
 		unsigned n = xread_eof(infile, header, 0x2c);
@@ -500,13 +509,13 @@ void process_patch(FILE *infile, FILE *outfile) {
 		uint32_t bytecount = read32(header, o_byte_count);
 		if (bytecount > 0xffff) errx(EX_DATAERR, "omf segment too big");
 
-		unsigned seg_offset = seg_size - 5; // for seg start+offset math.
+		current_seg_offset = seg_size - 5;
 		if (name[0]) {
 			entry *e = find_entry(name, 0, 1);
 			// what if there's a name clash???
 			e->bits = 1;
-			e->seg = segnum;
-			e->offset = seg_offset;
+			e->seg = patch_seg;
+			e->offset = current_seg_offset;
 		}
 
 
@@ -521,7 +530,7 @@ void process_patch(FILE *infile, FILE *outfile) {
 		for (;;) {
 			uint32_t x;
 			unsigned sz;
-			uint32_t org;
+			unsigned disp;
 			reloc r;
 			entry *e;
 
@@ -555,9 +564,9 @@ void process_patch(FILE *infile, FILE *outfile) {
 					sz = body[offset++]; // num bytes..
 					// parse the expression, copy into a list to eval later?
 
-					org = 0;
+					disp = 0;
 					if (op == OMF_RELEXPR) {
-						org = read32(body, offset);
+						disp = read32(body, offset);
 						offset += 4;
 					}
 					x = expr_size(body + offset);
@@ -573,7 +582,7 @@ void process_patch(FILE *infile, FILE *outfile) {
 					el->type = op;
 					el->size = sz;
 					el->offset = seg_size - 5;
-					el->org = org;
+					el->disp = disp;
 					el->level = level;
 
 					SPACE_FOR(sz);
@@ -588,7 +597,8 @@ void process_patch(FILE *infile, FILE *outfile) {
 					offset += x + 4; // length, type, private
 
 					// if we can eval the expression, insert it now.
-					// otherwise, copy and 
+					// otherwise, that's a problem.
+					current_pc = seg_size - 5; 
 					x = eval_expr(body + offset, &r, level);
 					if (x > 0) {
 						offset += x;
@@ -606,6 +616,7 @@ void process_patch(FILE *infile, FILE *outfile) {
 
 				case OMF_STRONG:
 				case OMF_USING:
+					// skip...
 					x = body[offset++];
 					offset += x;
 					break;
@@ -620,13 +631,15 @@ void process_patch(FILE *infile, FILE *outfile) {
 
 	// now evaluate all the expressions...
 	el = head;
+	current_seg_offset = 0;
 	while (el) {
 
 		// presumably, there won't be a lot of relocs
 		// so we'll skip SUPER support (which is a lot more work)
 		// and just generate reloc records here and now.
 
-		// actually... just generate the 
+		// actually... just generate and inserts reloc here and now
+		// (no super) 
 		reloc r;
 		#if 0
 		if (reloc_size == reloc_capacity) {
@@ -635,21 +648,40 @@ void process_patch(FILE *infile, FILE *outfile) {
 		}
 		reloc *r = relocs + reloc_size;
 		#endif
+		current_pc = el->offset;
 		int ok = eval_expr(el->expr, &r, el->level);
 		if (ok < 0) errx(1, "Unable to evalute expression");
 
+		if (el->type == OMF_RELEXPR) {
+			// special case... 
+			if (r.seg != patch_seg) {
+				errx(1, "bad relative relocation");
+			}
+			if (r.shift) errx(1, "bad relative relocation");
+
+			// todo -- the org....
+			int32_t delta = r.offset - el->offset - el->disp;
+			if (el->size == 1 && (delta > 127 || delta < -128))
+				errx(1, "relative branch overflow");
+			// if (size == 2 && (delta > 32767 || delta < -32768))
+				// errx(1, "relative branch overflow");
+			// 16-bit can't overflow because it will wrap within the bank...
+			r.seg = 0;
+			r.offset = delta;
+		}
+
 		if (r.seg == 0) {
-			// patch in place...
-			// todo -- bk, rel, etc.
-			unsigned loc = 5 + e->offset;
-			if (e->type == OMF_RELEXPR) {
+			// constant - patch in place...
+			// todo -- bk, etc.
+			unsigned loc = 5 + el->offset;
+			if (el->type == OMF_RELEXPR) {
 				// todo ....
 			}
 
 			for (unsigned i = 0; i < el->size; ++i, r.offset >>= 8) {
-				body[loc] = r.offset & 0xff;
+				seg[loc++] = r.offset & 0xff;
 			}
-		} else if (r.seg == segnum) {
+		} else if (r.seg == patch_seg) {
 			// reloc / creloc
 			SPACE_FOR(11)  // OMF_RELOC
 
@@ -708,21 +740,22 @@ void process_patch(FILE *infile, FILE *outfile) {
 	SPACE_FOR(1)
 	seg[seg_size++] = OMF_END;
 
+	uint32_t bytecount = seg_size; // todo - plus header size...
 	memset(header, 0, sizeof(header));
 	if (omf_version == 1) {
-		write32(header, o_byte_count, (bytecount + 511) >> 9);
+		write32(header, o_block_count, (bytecount + 511) >> 9);
 		header[0x0c] = 0x10; // init segment.
 	} else {
 		write32(header, o_byte_count, bytecount);
 		write16(header, o_kind, 0x10); // init segment.
 	}
-	write32(header, o_length, ...);
+	write32(header, o_length, reloc_offset - 5);
 	header[o_label_length] = 0; // todo .. when in rome...
 	header[o_number_length] = 4;
 	header[o_version] = omf_version;
 	write32(header, o_bank_size, 0x010000L);
 	header[o_number_sex] = 0; // little-endian
-	write16(header, o_segment_number, segnum);
+	write16(header, o_segment_number, patch_seg);
 	write16(header, o_displacement_name, 0x2c);
 	write16(header, o_displacement_data, 0x2c + 10 + );
 	// loadname, segname...
@@ -733,7 +766,13 @@ void process_patch(FILE *infile, FILE *outfile) {
 
 }
 
+// first segment is an expressload segment.
+// we need to load the header, bump the sizes,
+// insert the new entry.
+void process_express(infile, outfile) {
 
+
+}
 
 
 int main(int argc, char **argv) {
