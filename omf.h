@@ -62,14 +62,20 @@
 
 enum {
 	// omf header displacements i care about
-	o_byte_count = 0,
+	o_byte_count = 0, // v 2+
+	o_block_count = 0, // v0/1
 	o_length = 8,
+	o_type = 0x0c, // v0/v1
 	o_label_length = 0x0d,
 	o_number_length = 0x0e,
 	o_version = 0x0f,
-	o_kind = 0x14,
+	o_bank_size = 0x10,
+	o_kind = 0x14, // v2+
+	o_origin = 0x18,
+	o_alignment = 0x1c,
 	o_number_sex = 0x20,
 	o_segment_number = 0x22,
+	o_entry = 0x24,
 	o_displacement_name = 0x28,
 	o_displacement_data = 0x2a
 };

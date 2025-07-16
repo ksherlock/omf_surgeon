@@ -7,10 +7,37 @@
 #include <stdint.h>
 #include <ctype.h>
 
+#include "omf.h"
+#include "x.h"
+#include "read.h"
+
+
+unsigned current_seg = 0;
+unsigned current_pc = 0;
+
 
 void usage(int ex) {
-	fputs("omf-relinker input patch output\n", stdout);
+	fputs(
+		"omf-relinker [-viC] input patch output\n"
+		"flags:\n"
+		"-v  be verbose\n"
+		"-i  case insensitive\n"
+		"-C  don't compress relocations\n"
+		, stdout);
 	exit(ex);
+}
+
+
+void *xrealloc(void *ptr, size_t size) {
+	void * tmp = realloc(ptr, size);
+	if (!tmp) err(1, "realloc");
+	return tmp;
+}
+
+void *xmalloc(size_t size) {
+	void *tmp = malloc(size);
+	if (!tmp) err(1, "malloc");
+	return tmp;
 }
 
 
@@ -36,7 +63,7 @@ typedef struct entry {
 
 
 #define HASH_TABLE_SIZE 67
-static struct hash_entry *hash_table[HASH_TABLE_SIZE];
+static entry *hash_table[HASH_TABLE_SIZE];
 
 
 typedef struct expr_list {
@@ -106,6 +133,8 @@ entry *find_entry(const char *name, int level, int insert) {
 			memcpy(e->name, name, n);
 			e->hash = h;
 			e->level = level;
+			e->next = hash_table[ix];
+			hash_table[ix] = e;
 			return e;
 		}
 	}
@@ -115,7 +144,9 @@ entry *find_entry(const char *name, int level, int insert) {
 
 
 
-static uint8_t header[0x30 +10 + 64];
+static uint8_t header[0x30 + 10 + 64];
+
+static char name[64];
 
 
 int omf_version = 0;
@@ -123,23 +154,28 @@ int omf_lablen = 0;
 int expressload = 0;
 int compress = 0;
 int super = 0;
+int verbose = 0;
+int insensitive = 0;
 
 
 unsigned readstr(char *dest, const uint8_t *src) {
 
+	unsigned rv, n;
 	if (omf_lablen) {
-		unsigned n = omf_lablen;
-		memcpy(dest, src, n);
-		dest[n] = 0;
-		return n;
+		rv = n = omf_lablen;
+	} else {
+		n = *src++;
+		rv = n + 1;
 	}
-	unsigned n = src[0];
+
 	if (dest) {
 		if (n > 63) errx(EX_DATAERR, "string too long");
-		memcpy(dest, src + 1, n);
+
+		memcpy(dest, src, n);
+		while (n && dest[n] < 0x21) --n; // strip ws
 		dest[n] = 0;
 	}
-	return n + 1;
+	return rv;
 }
 
 
@@ -155,6 +191,7 @@ int eval_expr(const uint8_t *expr, struct reloc *r, int level) {
 	unsigned op;
 	unsigned offset = 0;
 	unsigned s = 0;
+	entry *e;
 
 	reloc *a;
 	reloc *b;
@@ -234,19 +271,19 @@ int eval_expr(const uint8_t *expr, struct reloc *r, int level) {
 				a = &r_stack[s++];
 				a->seg = current_seg;
 				a->shift = 0;
-				a->offset = read32(expr, offset);
+				a->offset = read32(expr, offset); 
+				// todo - this needs to be adjusted by the current seg offset.
 				offset += 4;
 				break;
 
 			case EXPR_WEAK:
 			case EXPR_LABEL:
 				a = &r_stack[s++];
-				x = readstr(name, expr + offset);
-				offset += x;
+				offset += readstr(name, expr + offset);
 				e = find_entry(name, level, 0);
 				if (!e) return -1;
 				if (!(e->bits & 0x01)) return -1;
-				a->segnum = e->segnum;
+				a->seg = e->seg;
 				a->offset = e->offset;
 				a->shift = 0;
 				break;
@@ -280,8 +317,10 @@ int expr_size(const uint8_t *expr) {
 				return -1;
 			case EXPR_PC:
 				break;
-			case EXPR_ABS:
 			case EXPR_REL:
+				// todo - this needs to be adjusted by the current seg offset.
+
+			case EXPR_ABS:
 				offset += 4;
 				break;
 			case EXPR_WEAK:
@@ -297,8 +336,15 @@ int expr_size(const uint8_t *expr) {
 }
 
 
+void upcase_name(void) {
+	for (unsigned i = 0; ; ++i) {
+		unsigned c = name[i];
+		if (!c) break;
+		if (islower(c)) name[i] = toupper(c);
+	}	
+}
 
-copy_segments(FILE *infile, FILE *outfile) {
+void copy_segments(FILE *infile, FILE *outfile) {
 
 
 	for(;;) {
@@ -325,8 +371,8 @@ copy_segments(FILE *infile, FILE *outfile) {
 
 		// grr... omf v1 uses block count, but the last segment may be a partial block.
 
-		uint32_t bytecount = read32(header, 0);
-		if (version == 1) bytecount *= 512;
+		uint32_t bytecount = read32(header, o_byte_count);
+		if (omf_version == 1) bytecount *= 512;
 
 		omf_lablen = header[o_label_length];
 		if (omf_lablen > 63) errx(EX_DATAERR, "string too long");
@@ -354,23 +400,27 @@ copy_segments(FILE *infile, FILE *outfile) {
 		// if name is printable, add it as a hash entry...
 		entry *e;
 		if (name[0]) {
-			for (unsigned i = 0; ; ++i) {
-				unsigned c = name[i];
-				if (!c) break;
-				if (islower(c)) name[i] = tolower(c);
-			}
-			e = make_entry(name);
-			e->segnum = segnum;
+			if (insensitive) upcase_name();
+			e = find_entry(name, 0, 1);
+			e->seg = segnum;
 			e->bits = 1; // defined.
 		}
 
-		snprintf(name, 64, "SEG_%u", segnum);
-		e = make_entry(name);
-		e->segnum = segnum;
+		if (insensitive)
+			snprintf(name, 64, "SEG_%u", segnum);
+		else
+			snprintf(name, 64, "seg_%u", segnum);
+
+		e = find_entry(name, 0, 1);
+		e->seg = segnum;
 		e->bits = 1; // defined.
 
-		snprintf(name, sizeof(name), "SEG_%u_SIZE", segnum);
-		e = make_entry(name);
+		if (insensitive)
+			snprintf(name, sizeof(name), "SEG_%u_SIZE", segnum);
+		else
+			snprintf(name, sizeof(name), "seg_%u_size", segnum);
+
+		e = find_entry(name, 0, 1);
 		e->offset = read32(header, o_length);
 		e->bits = 1; // defined.
 
@@ -397,6 +447,8 @@ int sort_reloc_by_seg(const reloc *a, const void *b) {
 	return n;
 }
 #endif
+
+
 
 #define SPACE_FOR(x) if ((seg_size + (x)) <= seg_capacity) \
 { seg_capacity += 1024; seg = xrealloc(seg, seg_capacity); }
@@ -441,7 +493,6 @@ void process_patch(FILE *infile, FILE *outfile) {
 		unsigned disp_data = read16(header, o_displacement_data);
 		// unsigned kind = read16(header, o_kind);
 
-		header_size = disp_data;
 		xread(infile, header + 0x2c, disp_data - 0x2c);
 
 		readstr(name, header + disp_name + 10); // disp_name is to the 10-char loadname.
@@ -449,33 +500,36 @@ void process_patch(FILE *infile, FILE *outfile) {
 		uint32_t bytecount = read32(header, o_byte_count);
 		if (bytecount > 0xffff) errx(EX_DATAERR, "omf segment too big");
 
-		for (unsigned i = 0; ; ++i) {
-			unsigned c = name[i];
-			if (!c) break;
-			if (islower(c)) name[i] = toupper(c);
-		}
+		unsigned seg_offset = seg_size - 5; // for seg start+offset math.
 		if (name[0]) {
-			entry *e = make_entry(name, 0, 1);
+			entry *e = find_entry(name, 0, 1);
 			// what if there's a name clash???
 			e->bits = 1;
-			e->seg = seg;
+			e->seg = segnum;
+			e->offset = seg_offset;
 		}
 
 
-		bytecount -= header_size;
+		bytecount -= disp_data;
 
 		uint8_t *body;
 		body = xmalloc(bytecount);
 		xread(infile, body, bytecount);
 
 		unsigned offset = 0;
+
 		for (;;) {
 			uint32_t x;
+			unsigned sz;
+			uint32_t org;
+			reloc r;
+			entry *e;
+
 			unsigned op = body[offset++];
 			if (op == OMF_END) break;
 			if (op < 0xe0) {
 				SPACE_FOR(op)
-				memcpy(seg + seg_size, op, body + offset);
+				memcpy(seg + seg_size, body + offset, op);
 				seg_size += op;
 				continue;
 			}
@@ -483,6 +537,7 @@ void process_patch(FILE *infile, FILE *outfile) {
 			switch(op) {
 				default:
 					errx(1, "unsupported omf op $%02x", op);
+					break;
 
 				case OMF_DS:
 					x = read32(body, offset);
@@ -508,7 +563,6 @@ void process_patch(FILE *infile, FILE *outfile) {
 					x = expr_size(body + offset);
 
 					el = xmalloc(x + sizeof(expr_list));
-
 
 					memset(el, 0, sizeof(expr_list));
 					memcpy(el->expr, body + offset, x);
@@ -538,14 +592,15 @@ void process_patch(FILE *infile, FILE *outfile) {
 					x = eval_expr(body + offset, &r, level);
 					if (x > 0) {
 						offset += x;
-						e = find_entry(name, op == OMF_EQU ? level : 0);
+						e = find_entry(name, op == OMF_EQU ? level : 0, 1);
 						if (e->bits) warnx("duplicate label %s", name);
 						e->bits |= 1;
 						e->seg = r.seg;
 						e->offset = r.offset;
 						e->shift = r.shift;
 					} else {
-						errx(1, "Unable to evaluate expression");
+						// todo -- name might have been overwritten at this point...
+						errx(1, "Unable to evaluate expression %s", name);
 					}
 					break;
 
@@ -594,7 +649,7 @@ void process_patch(FILE *infile, FILE *outfile) {
 			for (unsigned i = 0; i < el->size; ++i, r.offset >>= 8) {
 				body[loc] = r.offset & 0xff;
 			}
-		} else if (r.seg == seg) {
+		} else if (r.seg == segnum) {
 			// reloc / creloc
 			SPACE_FOR(11)  // OMF_RELOC
 
@@ -684,11 +739,20 @@ void process_patch(FILE *infile, FILE *outfile) {
 int main(int argc, char **argv) {
 
 	int c;
+
+	verbose = 0;
+	compress = 1;
+	super = 0;
+	insensitive = 0;
+
 	// flag to inhibit super / compressed?
 	// omf version deduced from input file...
-	while ((c = getopt(argc, argv, "h")) != -1) {
+	while ((c = getopt(argc, argv, "hiC")) != -1) {
 		switch(c) {
 			case 'h': usage(0); break;
+			case 'i': insensitive = 1; break;
+			case 'v': verbose = 1; break;
+			case 'C': compress = 0; break;
 			default: usage(1); break;
 		}
 	}
@@ -696,4 +760,32 @@ int main(int argc, char **argv) {
 	argc -= optind;
 	argv += optind;
 
+	if (argc != 3) usage(1);
+
+
+	FILE *infile;
+	FILE *outfile;
+	FILE *objfile;
+
+	char *cp;
+	cp = argv[0];
+	infile = fopen(cp, "rb");
+	if (!infile) errx(1, "open %s", cp);
+
+	cp = argv[1];
+	objfile = fopen(cp, "rb");
+	if (!objfile) errx(1, "open %s", cp);
+
+	cp = argv[2];
+	outfile = fopen(cp, "wb");
+	if (!infile) errx(1, "open %s", cp);
+
+	copy_segments(infile, outfile);
+	process_patch(objfile, outfile);
+	if (expressload) process_express(infile, outfile);
+
+	fclose(infile);
+	fclose(objfile);
+	fclose(outfile);
+	return 0;
 }
