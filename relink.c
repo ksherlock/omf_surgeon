@@ -64,7 +64,7 @@ void usage(int ex) {
 		"flags:\n"
 		"-v        be verbose\n"
 		"-s name   segment name\n"
-		"-i        case insensitive\n"
+		"-I        case sensitive\n"
 		"-C        don't compress relocations\n"
 		, stdout);
 	exit(ex);
@@ -189,7 +189,7 @@ unsigned readstr(char *dest, const uint8_t *src) {
 		if (n > 63) errx(EX_DATAERR, "string too long");
 
 		memcpy(dest, src, n);
-		while (n && dest[n] < 0x21) --n; // strip ws
+		while (n && dest[n-1] < 0x21) --n; // strip ws
 		dest[n] = 0;
 	}
 	return rv;
@@ -423,7 +423,10 @@ void process_omf_file(FILE *infile, FILE *outfile) {
 
 
 	unsigned segnum = 0;
-	for(;;) {
+	for(segnum = 1; ; ++segnum) {
+
+		long pos = ftell(infile);
+
 		unsigned disp_data = read_header(infile, header);
 		if (!disp_data) break;
 
@@ -433,7 +436,9 @@ void process_omf_file(FILE *infile, FILE *outfile) {
 
 		readstr(name, header + disp_name + 10); // disp_name is to the 10-char loadname.
 
-		segnum = read16(header, o_segment_number);
+		if (segnum != read16(header, o_segment_number)) {
+			errx(1, "bad segnum");
+		}
 
 		uint32_t bytecount = read32(header, o_byte_count);
 
@@ -501,18 +506,23 @@ void process_omf_file(FILE *infile, FILE *outfile) {
 		e->offset = read32(header, o_length);
 		e->bits = 1; // defined.
 
+
+		// back up so copy_vx will include the header as well.
+		xseek(infile, pos, SEEK_SET);
+
 		// copy to output file...
 		if (omf_version == 1) {
 			// omf v1 uses block count and segments are
 			// padded to a full block.
 			// BUT the final segment is not padded.
+
 			copy_v1(infile, outfile, bytecount);
 		} else {
 			copy_v2(infile, outfile, bytecount);
 		}
 	}
-	if (segnum == 0) errx(1,"bad omf file");
-	patch_seg = segnum + 1;
+	if (segnum == 1) errx(1,"bad omf file");
+	patch_seg = segnum;
 }
 
 
@@ -570,21 +580,19 @@ void process_obj_file(FILE *infile, FILE *outfile) {
 
 	for (unsigned level = 1;;++level) {
 
-		unsigned n = xread_eof(infile, header, 0x2c);
-		if (n == 0) return; // eof.
 
-		if (header[o_version] != 2 || header[o_number_sex] != 0
-			|| header[o_number_length] != 4 || header[o_label_length] != 0) {
+		unsigned disp_data = read_header(infile, header);
+		if (!disp_data) break;
+
+		if (header[o_version] != 2 || header[o_label_length] != 0) {
 			errx(EX_DATAERR, "bad/unsupported OMF file");
 		}
 
 		unsigned disp_name = read16(header, o_displacement_name);
-		unsigned disp_data = read16(header, o_displacement_data);
 		// unsigned kind = read16(header, o_kind);
 
-		xread(infile, header + 0x2c, disp_data - 0x2c);
-
-		readstr(name, header + disp_name + 10); // disp_name is to the 10-char loadname.
+		// disp_name is to the 10-char loadname.
+		readstr(name, header + disp_name + 10);
 
 		uint32_t bytecount = read32(header, o_byte_count);
 		if (bytecount > 0xffff) errx(EX_DATAERR, "omf segment too big");
@@ -620,6 +628,7 @@ void process_obj_file(FILE *infile, FILE *outfile) {
 				SPACE_FOR(op)
 				memcpy(seg + seg_size, body + offset, op);
 				seg_size += op;
+				offset += op;
 				continue;
 			}
 
@@ -847,17 +856,21 @@ void process_obj_file(FILE *infile, FILE *outfile) {
 	write16(patch_header, o_displacement_name, 0x2c);
 
 
+	// update the lconst record.
+	write32(seg, 1, reloc_offset - 5);
+
 	memset(patch_header + 0x2c, ' ', 10); // load name.
 	unsigned n = 0;
 	if (local_omf_lablen) {
 		unsigned i;
 		for (i = 0; i < local_omf_lablen; ++i) {
 			unsigned c = segname[i];
-			if (!i) break;
+			if (!c) break;
 			patch_header[0x2c + 10 + i] = c;
 		}
 		while (i < local_omf_lablen) 
 			patch_header[0x2c + 10 + i++] = 0;
+		n = local_omf_lablen;
 	} else {
 		unsigned l = strlen(segname);
 		patch_header[0x2c + 10] = l;
@@ -865,7 +878,7 @@ void process_obj_file(FILE *infile, FILE *outfile) {
 		n = l + 1;
 	}
 	patch_header_size = 0x2c + 10 + n; 
-	write16(patch_header, o_displacement_data, header_size);
+	write16(patch_header, o_displacement_data, patch_header_size);
 
 
 	long pos = ftell(outfile);
@@ -996,16 +1009,16 @@ int main(int argc, char **argv) {
 	verbose = 0;
 	compress = 1;
 	super = 0;
-	insensitive = 0;
+	insensitive = 1;
 
 	segname = "Surgeon";
 
 	// flag to inhibit super / compressed?
 	// omf version deduced from input file...
-	while ((c = getopt(argc, argv, "hiCs:")) != -1) {
+	while ((c = getopt(argc, argv, "hICs:")) != -1) {
 		switch(c) {
 			case 'h': usage(0); break;
-			case 'i': insensitive = 1; break;
+			case 'I': insensitive = 0; break;
 			case 'v': verbose = 1; break;
 			case 'C': compress = 0; break;
 			case 's': segname = optarg; break;
