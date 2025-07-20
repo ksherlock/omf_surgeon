@@ -52,7 +52,6 @@ typedef struct seg_list {
 
 
 
-void *xmalloc(unsigned size);
 struct seg_list *parse_file(FILE *f);
 
 enum {

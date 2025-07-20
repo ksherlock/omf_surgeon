@@ -1,10 +1,22 @@
 
 CFLAGS += -Wall -g
 
-omf_surgeon : surgeon.o parse.o
+.phony: all
+
+all: omf_surgeon omf_relink
+
+omf_surgeon : surgeon.o parse.o x.o
 	$(CC) -o $@ $^
-surgeon.o : surgeon.c surgeon.h
-parse.o : parse.c surgeon.h
+
+omf_relink : relink.o x.o
+	$(CC) -o $@ $^
+
+surgeon.o : surgeon.c surgeon.h x.h read.h
+relink.o : relink.c x.h read.h
+parse.o : parse.c surgeon.h x.h
+x.o : x.c x.h
+
+
 
 .PHONY: clean
 clean:

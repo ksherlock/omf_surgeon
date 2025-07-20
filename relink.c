@@ -12,34 +12,62 @@
 #include "read.h"
 
 
+/* used by eval_expr / expr_size */
 unsigned current_pc;
 unsigned current_seg_offset;
+
+
+#define MIN_HEADER_SIZE (0x30 + 10 + 1)
+#define MAX_HEADER_SIZE (0x30 + 10 + 64)
+
+
+unsigned header_size;
+uint8_t header[0x30 + 10 + 64];
+
+
 unsigned patch_seg;
+
+uint32_t patch_lconst_mark;
+unsigned patch_lconst_size;
+uint32_t patch_reloc_mark;
+unsigned patch_reloc_size;
+
+unsigned patch_header_size;
+static uint8_t patch_header[0x30 + 10 + 64];
+
+
+unsigned expr_header_size;
+unsigned expr_body_size;
+// uint8_t expr_header[0x30 + 10 + 64];
+
+
+
+static char name[64];
+
+
+int omf_version = 0;
+int omf_lablen = 0;
+int expressload = 0;
+
+int compress = 0;
+int super = 0;
+int verbose = 0;
+int insensitive = 0;
+char *segname = 0;
+
 
 
 
 void usage(int ex) {
 	fputs(
-		"omf-relinker [-viC] input patch output\n"
+		"omf-relinker [-viC] [-s name] input patch output\n"
 		"flags:\n"
-		"-v  be verbose\n"
-		"-i  case insensitive\n"
-		"-C  don't compress relocations\n"
+		"-v        be verbose\n"
+		"-s name   segment name\n"
+		"-i        case insensitive\n"
+		"-C        don't compress relocations\n"
 		, stdout);
 	exit(ex);
-}
-
-
-void *xrealloc(void *ptr, size_t size) {
-	void * tmp = realloc(ptr, size);
-	if (!tmp) err(1, "realloc");
-	return tmp;
-}
-
-void *xmalloc(size_t size) {
-	void *tmp = malloc(size);
-	if (!tmp) err(1, "malloc");
-	return tmp;
 }
 
 
@@ -146,19 +174,6 @@ entry *find_entry(const char *name, int level, int insert) {
 
 
 
-static uint8_t header[0x30 + 10 + 64];
-
-static char name[64];
-
-
-int omf_version = 0;
-int omf_lablen = 0;
-int expressload = 0;
-int compress = 0;
-int super = 0;
-int verbose = 0;
-int insensitive = 0;
-
 
 unsigned readstr(char *dest, const uint8_t *src) {
 
@@ -185,6 +200,8 @@ unsigned readstr(char *dest, const uint8_t *src) {
 
 // returns -1 on error, expr length on success.
 int eval_expr(const uint8_t *expr, struct reloc *r, int level) {
+
+	static char name[64];
 
 	// realistically a 2-item stack should be enough in most cases...
 	#define R_STACK_SIZE 8
@@ -282,28 +299,35 @@ int eval_expr(const uint8_t *expr, struct reloc *r, int level) {
 				a = &r_stack[s++];
 				offset += readstr(name, expr + offset);
 				e = find_entry(name, level, 0);
-				if (!e) return -1;
+				if (!e) {
+					errx(1, "Missing symbol: %s", name);
+					return -1;
+				}
 				if (!(e->bits & 0x01)) return -1;
 				a->seg = e->seg;
 				a->offset = e->offset;
 				a->shift = 0;
 				break;
-			detault:
-				errx(1, "unsupported omf expr op $%02x", op);
+			default:
+				errx(1, "Unsupported omf expr op $%02x", op);
 				return -1;
 		}
 
 		if (s == R_STACK_SIZE-1) {
-			errx(1, "expression too complicated");
+			errx(1, "Expression stack overflow");
 			return -1;
 		}
 
 	}
-	if (s != 1) return -1;
+	if (s != 1) {
+		errx(1, "Empty expression");
+		return -1;
+	}
 	*r = r_stack[0];
 	return offset;
 }
 
+/* returns the omf expression size.  Also updates the EXPR_REL offset. */
 int expr_size(uint8_t *expr) {
 
 	unsigned op;
@@ -348,36 +372,70 @@ void upcase_name(void) {
 	}	
 }
 
-void copy_segments(FILE *infile, FILE *outfile) {
+
+/* reads the header, returns size (disp_data) */
+/* returns 0 on eof */
+unsigned read_header(FILE *infile, uint8_t *header) {
+
+	unsigned n = xread_eof(infile, header, 0x2c);
+	if (!n) return 0;
+
+	if (header[o_version] < 1 || header[o_version] > 2
+		|| header[o_number_sex] != 0
+		|| header[o_number_length] != 4) {
+		errx(EX_DATAERR, "Invalid OMF segment header");
+	}
+
+	unsigned disp_data = read16(header, o_displacement_data);
+	if (disp_data < MIN_HEADER_SIZE || disp_data > MAX_HEADER_SIZE)
+		errx(EX_DATAERR, "Invalid OMF segment header");
+
+	xread(infile, header + 0x2c, disp_data - 0x2c);
+	return disp_data;
+}
+
+static char buffer[512];
+void copy_v2(FILE *infile, FILE *outfile, uint32_t size) {
+
+	while (size) {
+		unsigned n = size > 512 ? 512 : size;
+		xread(infile, buffer, n);
+		xwrite(outfile, buffer, n);
+		size -= n;
+	}
+}
+
+void copy_v1(FILE *infile, FILE *outfile, uint32_t blocks) {
+
+	// last block may be partial at eof.
+
+	while (blocks) {
+		int n = fread(buffer, 1, 512, infile);
+		if (n < 512 && blocks > 1) {
+			errx(1, "fwrite");
+		}
+		xwrite(outfile, buffer, n);
+		--blocks;
+	}
+}
+
+void process_omf_file(FILE *infile, FILE *outfile) {
 
 
 	unsigned segnum = 0;
 	for(;;) {
-		unsigned n = xread_eof(infile, header, 0x2c);
-		if (!n) break;
-
-		if (header[o_version] < 1 || header[o_version] > 2
-			|| header[o_number_sex] != 0
-			|| header[o_number_length] != 4) {
-			errx(EX_DATAERR, "bad/unsupported OMF file");
-		}
-
+		unsigned disp_data = read_header(infile, header);
+		if (!disp_data) break;
 
 		unsigned disp_name = read16(header, o_displacement_name);
-		unsigned disp_data = read16(header, o_displacement_data);
 		// unsigned kind = read16(header, o_kind);
 
-		// header_size = disp_data;
-		xread(infile, header + 0x2c, disp_data - 0x2c);
 
 		readstr(name, header + disp_name + 10); // disp_name is to the 10-char loadname.
 
 		segnum = read16(header, o_segment_number);
 
-		// grr... omf v1 uses block count, but the last segment may be a partial block.
-
 		uint32_t bytecount = read32(header, o_byte_count);
-		if (omf_version == 1) bytecount *= 512;
 
 		omf_lablen = header[o_label_length];
 		if (omf_lablen > 63) errx(EX_DATAERR, "string too long");
@@ -390,16 +448,30 @@ void copy_segments(FILE *infile, FILE *outfile) {
 			if (!strcasecmp(name, "~ExpressLoad")) expressload = 1;
 
 
-			// if this is an expressload segment, add space for 1 extra segment, ....
 			if (expressload) {
+				// expressload requires omf v2 so don't worry about bytecount vs block_count
+
+				// skip the segment for now but add extra space in the outfile
+				// for the expressload segment to eventually go.
 
 				// each segment is 8 bytes (header entry table)
 				// + 2 bytes (segment number conversion)
 				// + 0x2e + name bytes
-				xseek(infile, bytecount - disp_data, SEEK_CUR);
+
+				expr_header_size = disp_data;
+				expr_body_size = bytecount - disp_data;
+				xseek(infile, bytecount, SEEK_SET);
+
+				// overhead from 1 more segment
+				unsigned n = 10 + 16 + 42;
+				n += omf_lablen ? omf_lablen : strlen(segname) + 1;
+
+				xseek(outfile, bytecount + n, SEEK_SET);
 				continue;
 			}
 		}
+
+		// if (omf_version == 1) bytecount *= 512;
 
 
 		// if name is printable, add it as a hash entry...
@@ -430,6 +502,14 @@ void copy_segments(FILE *infile, FILE *outfile) {
 		e->bits = 1; // defined.
 
 		// copy to output file...
+		if (omf_version == 1) {
+			// omf v1 uses block count and segments are
+			// padded to a full block.
+			// BUT the final segment is not padded.
+			copy_v1(infile, outfile, bytecount);
+		} else {
+			copy_v2(infile, outfile, bytecount);
+		}
 	}
 	if (segnum == 0) errx(1,"bad omf file");
 	patch_seg = segnum + 1;
@@ -461,14 +541,13 @@ int sort_reloc_by_seg(const reloc *a, const void *b) {
 { seg_capacity += 1024; seg = xrealloc(seg, seg_capacity); }
 
 
-void process_patch(FILE *infile, FILE *outfile) {
+void process_obj_file(FILE *infile, FILE *outfile) {
 
 	expr_list *head = 0;
 	expr_list *el;
 
-	unsigned reloc_size = 0;
-	unsigned reloc_capacity = 32;
-	reloc *relocs = xmalloc(sizeof(reloc) * reloc_capacity);
+	// unsigned reloc_capacity = 32;
+	// reloc *relocs = xmalloc(sizeof(reloc) * reloc_capacity);
 
 	unsigned seg_size = 5;
 	unsigned seg_capacity = 1024;
@@ -479,6 +558,7 @@ void process_patch(FILE *infile, FILE *outfile) {
 	seg[3] = 0;
 	seg[4] = 0;
 
+	unsigned local_omf_lablen = omf_lablen;
 
 	omf_lablen = 0;
 
@@ -632,6 +712,9 @@ void process_patch(FILE *infile, FILE *outfile) {
 	// now evaluate all the expressions...
 	el = head;
 	current_seg_offset = 0;
+
+	patch_lconst_size = seg_size - 5;
+	patch_reloc_mark = seg_size; // need to adjust for absolute location.
 	while (el) {
 
 		// presumably, there won't be a lot of relocs
@@ -674,9 +757,6 @@ void process_patch(FILE *infile, FILE *outfile) {
 			// constant - patch in place...
 			// todo -- bk, etc.
 			unsigned loc = 5 + el->offset;
-			if (el->type == OMF_RELEXPR) {
-				// todo ....
-			}
 
 			for (unsigned i = 0; i < el->size; ++i, r.offset >>= 8) {
 				seg[loc++] = r.offset & 0xff;
@@ -691,12 +771,16 @@ void process_patch(FILE *infile, FILE *outfile) {
 				seg[seg_size++] = r.shift;
 				write16(seg, seg_size, el->offset); seg_size += 2;
 				write16(seg, seg_size, r.offset); seg_size += 2;
+
+				patch_reloc_size += 7;
 			} else {
 				seg[seg_size++] = OMF_RELOC;
 				seg[seg_size++] = el->size;
 				seg[seg_size++] = r.shift;
 				write32(seg, seg_size, el->offset); seg_size += 4;
 				write32(seg, seg_size, r.offset); seg_size += 4;
+
+				patch_reloc_size += 11;
 			}
 
 		} else {
@@ -710,6 +794,8 @@ void process_patch(FILE *infile, FILE *outfile) {
 				write16(seg, seg_size, el->offset); seg_size += 2;
 				seg[seg_size++] = r.seg;
 				write16(seg, seg_size, r.offset); seg_size += 2;
+
+				patch_reloc_size += 8;
 			} else {
 				seg[seg_size++] = OMF_INTERSEG;
 				seg[seg_size++] = el->size;
@@ -718,6 +804,8 @@ void process_patch(FILE *infile, FILE *outfile) {
 				write16(seg, seg_size, 1); seg_size += 2; // file num
 				write16(seg, seg_size, r.seg); seg_size += 2;
 				write32(seg, seg_size, r.offset); seg_size += 4;
+
+				patch_reloc_size += 15;
 			}
 		}
 
@@ -741,37 +829,163 @@ void process_patch(FILE *infile, FILE *outfile) {
 	seg[seg_size++] = OMF_END;
 
 	uint32_t bytecount = seg_size; // todo - plus header size...
-	memset(header, 0, sizeof(header));
+	memset(patch_header, 0, sizeof(patch_header));
 	if (omf_version == 1) {
-		write32(header, o_block_count, (bytecount + 511) >> 9);
-		header[0x0c] = 0x10; // init segment.
+		write32(patch_header, o_block_count, (bytecount + 511) >> 9);
+		patch_header[0x0c] = 0x10; // init segment.
 	} else {
-		write32(header, o_byte_count, bytecount);
-		write16(header, o_kind, 0x10); // init segment.
+		write32(patch_header, o_byte_count, bytecount);
+		write16(patch_header, o_kind, 0x10); // init segment.
 	}
-	write32(header, o_length, reloc_offset - 5);
-	header[o_label_length] = 0; // todo .. when in rome...
-	header[o_number_length] = 4;
-	header[o_version] = omf_version;
-	write32(header, o_bank_size, 0x010000L);
-	header[o_number_sex] = 0; // little-endian
-	write16(header, o_segment_number, patch_seg);
-	write16(header, o_displacement_name, 0x2c);
-	write16(header, o_displacement_data, 0x2c + 10 + );
-	// loadname, segname...
+	write32(patch_header, o_length, reloc_offset - 5);
+	patch_header[o_label_length] = local_omf_lablen;
+	patch_header[o_number_length] = 4;
+	patch_header[o_version] = omf_version;
+	write32(patch_header, o_bank_size, 0x010000L);
+	patch_header[o_number_sex] = 0; // little-endian
+	write16(patch_header, o_segment_number, patch_seg);
+	write16(patch_header, o_displacement_name, 0x2c);
 
-	// write the output file
-	// if expressload, regenerate it...	
-	// if version 1, pad out previous seg, 
+
+	memset(patch_header + 0x2c, ' ', 10); // load name.
+	unsigned n = 0;
+	if (local_omf_lablen) {
+		unsigned i;
+		for (i = 0; i < local_omf_lablen; ++i) {
+			unsigned c = segname[i];
+			if (!i) break;
+			patch_header[0x2c + 10 + i] = c;
+		}
+		while (i < local_omf_lablen) 
+			patch_header[0x2c + 10 + i++] = 0;
+	} else {
+		unsigned l = strlen(segname);
+		patch_header[0x2c + 10] = l;
+		memcpy(patch_header + 0x2c + 10 + 1, segname, l);
+		n = l + 1;
+	}
+	patch_header_size = 0x2c + 10 + n; 
+	write16(patch_header, o_displacement_data, header_size);
+
+
+	long pos = ftell(outfile);
+
+	if (omf_version == 1) {
+		// pad out the previous segment to a full block.
+		unsigned n = pos & 0x1ff;
+
+		if (n) {
+			memset(buffer, 0, sizeof(buffer));
+
+			xwrite(outfile, buffer, 512 - n);
+			pos = (pos + 511) & ~511;
+		}
+	}
+
+	pos += patch_header_size;
+	patch_reloc_mark += pos;
+	patch_lconst_mark += pos + 5;
+
+	xwrite(outfile, patch_header, patch_header_size);
+	xwrite(outfile, seg, seg_size);
+	free(seg);
 
 }
 
-// first segment is an expressload segment.
+// first segment is an expressload segment. (implies omf v2)
 // we need to load the header, bump the sizes,
 // insert the new entry.
-void process_express(infile, outfile) {
+void process_express(FILE *infile, FILE *outfile) {
 
 
+	fseek(infile, 0, SEEK_SET);
+	fseek(outfile, 0, SEEK_SET);
+
+	uint8_t *body;
+	uint8_t *p;
+
+	unsigned disp_data = read_header(infile, header);
+	// unsigned disp_name = read16(header, o_displacement_name);
+
+	// uint32_t bytecount = read32(header, o_byte_count);
+
+
+	unsigned n = 10 + 16 + 42;
+	n += omf_lablen ? omf_lablen : strlen(segname) + 1;
+
+	body = p = xmalloc(expr_body_size + n);
+
+
+	uint32_t length = read32(header, o_length);
+	length += n;
+	write32(header, o_length, length);
+
+	xwrite(outfile, header, disp_data);
+
+	xread(infile, body, expr_body_size);
+
+	// fixup the lconst record
+	write32(body, 1, length);
+
+	xwrite(outfile, p, 5);
+	p += 5;
+
+	uint8_t *bp = p;
+	unsigned nseg = read16(bp, 4) + 1; // # segs - 1
+	write16(bp, 4, nseg);
+
+
+	bp += 6;
+
+	// need to bump relative offsets in the header entry table by 10...
+	for (unsigned i = 0; i < nseg; ++i, bp += 8) {
+		unsigned n = read16(bp, 0) + 10;
+		write16(bp, 0, n);
+	}
+
+
+	p += xwrite(outfile, p, 6 + 8 + (nseg << 3));
+
+	// new header entry table for the patch seg...
+
+	unsigned offset = p - body;
+
+	unsigned rel = expr_body_size - 1 - offset;
+
+	write16(buffer, 0, rel); // relative offset
+	write16(buffer, 2, 0); // flags
+	write32(buffer, 4, 0); // handle
+
+	xwrite(outfile, buffer, 8);
+
+	// now the segment conversion table
+	p += xwrite(outfile, p, nseg << 1);
+	write16(buffer, 0, patch_seg);
+	xwrite(outfile, buffer, 2);
+
+	// now the old headers....
+	offset = p - body;
+	unsigned sz = expr_body_size - offset - 1; // -1 for omf_end
+
+	xwrite(outfile, p, sz);
+
+	// new header
+	write32(buffer, 0, patch_lconst_mark);
+	write32(buffer, 4, patch_lconst_size);
+	write32(buffer, 8, patch_reloc_mark);
+	write32(buffer, 12, patch_reloc_size);
+
+	xwrite(outfile, buffer, 16);
+
+	xwrite(outfile, patch_header + 0x0c, patch_header_size - 0x0c);
+
+	// omf end
+	buffer[0] = OMF_END;
+	xwrite(outfile, buffer, 1);
+	// assert correct size? 
+
+
+	free(body);
 }
 
 
@@ -784,14 +998,17 @@ int main(int argc, char **argv) {
 	super = 0;
 	insensitive = 0;
 
+	segname = "Surgeon";
+
 	// flag to inhibit super / compressed?
 	// omf version deduced from input file...
-	while ((c = getopt(argc, argv, "hiC")) != -1) {
+	while ((c = getopt(argc, argv, "hiCs:")) != -1) {
 		switch(c) {
 			case 'h': usage(0); break;
 			case 'i': insensitive = 1; break;
 			case 'v': verbose = 1; break;
 			case 'C': compress = 0; break;
+			case 's': segname = optarg; break;
 			default: usage(1); break;
 		}
 	}
@@ -819,8 +1036,8 @@ int main(int argc, char **argv) {
 	outfile = fopen(cp, "wb");
 	if (!infile) errx(1, "open %s", cp);
 
-	copy_segments(infile, outfile);
-	process_patch(objfile, outfile);
+	process_omf_file(infile, outfile);
+	process_obj_file(objfile, outfile);
 	if (expressload) process_express(infile, outfile);
 
 	fclose(infile);

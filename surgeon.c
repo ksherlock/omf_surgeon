@@ -11,6 +11,8 @@
 
 #include "surgeon.h"
 
+#include "x.h"
+#include "read.h"
 
 // OMF assumptions:
 // little endian
@@ -32,78 +34,6 @@ static uint8_t buffer[512];
 
 uint8_t header[0x30 +10 + 64];
 unsigned header_size;
-
-
-// mallocs, exits on error
-void *xmalloc(unsigned size) {
-
-	void *m = malloc(size);
-	if (!m) err(1, "malloc");
-
-	return m;
-}
-
-
-unsigned xwrite(FILE *f, const void *data, unsigned n) {
-	unsigned nn = fwrite(data, 1, n, f);
-	if (nn != n) errx(1, "fwrite");
-	return n;
-}
-
-unsigned xread(FILE *f, void *data, unsigned n) {
-	unsigned nn = fread(data, 1, n, f);
-	if (nn != n) errx(1, "fread");
-	return n;
-}
-
-
-unsigned xread_eof(FILE *f, void *data, unsigned n) {
-	unsigned nn = fread(data, 1, n, f);
-	if (nn == 0 || nn == n) return nn;
-	errx(1, "fread");
-	return 0;
-}
-
-void xseek(FILE *f, long offset, int whence) {
-	int ok = fseek(f, offset, whence);
-	if (ok < 0) err(1, "fseek");
-}
-
-
-#ifdef __ORCAC__
-#define read16(base, offset) *(unsigned *)(base + offset)
-#else
-#define read16(base, offset) (base[offset] | (base[offset+1] << 8))
-#endif
-
-
-#ifdef __ORCAC__
-#define read32(base, offset) *(unsigned long *)(base + offset)
-#else
-#define read32(base, offset) (base[offset] | (base[offset+1] << 8) | (base[offset+2] << 16) | (base[offset+3] << 24))
-#endif
-
-
-
-#ifdef __ORCAC__
-#define write16(base, offset, value) *(unsigned *)(base + offset) = value
-#else
-#define write16(base, offset, value) do { \
-	base[offset] = value & 0xff; base[offset+1] = (value >> 8) & 0xff; \
-} while(0)
-#endif
-
-
-#ifdef __ORCAC__
-#define write32(base, offset, value) *(unsigned long *)(base + offset) = value
-#else
-#define write32(base, offset, value) do { \
-	base[offset] = value & 0xff; \
-	base[offset+1] = (value >> 8) & 0xff; \
-	base[offset+2] = (value >> 16) & 0xff; \
-	base[offset+3] = (value >> 24) & 0xff; \
-} while(0)
-#endif
 
 
 
@@ -527,7 +457,7 @@ void process_omf_file(void) {
 		unsigned n = xread_eof(infile, header, 0x2c);
 		if (n == 0) return; // eof.
 
-		if (header[o_version] != 2 || header[o_number_sex != 0]
+		if (header[o_version] != 2 || header[o_number_sex] != 0
 			|| header[o_number_length] != 4 || header[o_label_length] != 0) {
 			errx(EX_DATAERR, "bad/unsupported OMF file");
 		}

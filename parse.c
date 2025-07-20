@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "surgeon.h"
+#include "x.h"
 
 static char buffer[256];
 
