@@ -419,7 +419,7 @@ void copy_v1(FILE *infile, FILE *outfile, uint32_t blocks) {
 	}
 }
 
-void process_omf_file(FILE *infile, FILE *outfile) {
+void process_load_file(FILE *infile, FILE *outfile) {
 
 
 	unsigned segnum = 0;
@@ -514,7 +514,8 @@ void process_omf_file(FILE *infile, FILE *outfile) {
 		if (omf_version == 1) {
 			// omf v1 uses block count and segments are
 			// padded to a full block.
-			// BUT the final segment is not padded.
+			// However, I have encountered some examples
+			// where the final block is not padded.
 
 			copy_v1(infile, outfile, bytecount);
 		} else {
@@ -645,6 +646,24 @@ void process_obj_file(FILE *infile, FILE *outfile) {
 					offset += 4;
 					break;
 
+				case OMF_ALIGN:
+					x = read32(body, offset);
+					offset += 4;
+					if (x) {
+						// verify for power of 2
+						if ((x & (x - 1)) == 0) {
+							unsigned pc = seg_size - 5;
+							unsigned sz = pc & (x-1);
+							if (sz) {
+								x -= sz;
+								SPACE_FOR(x)
+								memset(seg + seg_size, 0, x);
+								seg_size += x;
+							}
+						}
+					}
+					break;
+
 				case OMF_EXPR:
 				case OMF_ZPEXPR:
 				case OMF_BKEXPR:
@@ -719,6 +738,9 @@ void process_obj_file(FILE *infile, FILE *outfile) {
 	unsigned reloc_offset = seg_size; // expressload needs this.
 
 	// now evaluate all the expressions...
+	// TODO -- these are backwards due to the linked list
+	// insertion order.  need to have head and tail pointers.
+
 	el = head;
 	current_seg_offset = 0;
 
@@ -885,10 +907,13 @@ void process_obj_file(FILE *infile, FILE *outfile) {
 
 	if (omf_version == 1) {
 		// pad out the previous segment to a full block.
+		// this should already be done but I think I've found
+		// at least one that didn't.
+
+		memset(buffer, 0, sizeof(buffer));
 		unsigned n = pos & 0x1ff;
 
 		if (n) {
-			memset(buffer, 0, sizeof(buffer));
 
 			xwrite(outfile, buffer, 512 - n);
 			pos = (pos + 511) & ~511;
@@ -901,6 +926,18 @@ void process_obj_file(FILE *infile, FILE *outfile) {
 
 	xwrite(outfile, patch_header, patch_header_size);
 	xwrite(outfile, seg, seg_size);
+
+	if (omf_version == 1) {
+		// pad out the segment to a full block.
+		pos = ftell(outfile);
+		unsigned n = pos & 0x1ff;
+
+		if (n) {
+			xwrite(outfile, buffer, 512 - n);
+			pos = (pos + 511) & ~511;
+		}
+	}
+
 	free(seg);
 
 }
@@ -1049,7 +1086,7 @@ int main(int argc, char **argv) {
 	outfile = fopen(cp, "wb");
 	if (!infile) errx(1, "open %s", cp);
 
-	process_omf_file(infile, outfile);
+	process_load_file(infile, outfile);
 	process_obj_file(objfile, outfile);
 	if (expressload) process_express(infile, outfile);
 
