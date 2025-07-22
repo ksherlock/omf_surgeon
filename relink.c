@@ -54,6 +54,7 @@ int super = 0;
 int verbose = 0;
 int insensitive = 0;
 char *segname = 0;
+unsigned segname_len = 0;
 
 
 
@@ -437,7 +438,7 @@ void process_load_file(FILE *infile, FILE *outfile) {
 		readstr(name, header + disp_name + 10); // disp_name is to the 10-char loadname.
 
 		if (segnum != read16(header, o_segment_number)) {
-			errx(1, "bad segnum");
+			errx(1, "segnum %u out of sequence", segnum);
 		}
 
 		uint32_t bytecount = read32(header, o_byte_count);
@@ -448,6 +449,48 @@ void process_load_file(FILE *infile, FILE *outfile) {
 
 		if (segnum == 1) {
 			omf_version = header[o_version];
+
+
+			// bytecount + length + segnum needs to be filled in later, everything else done now.
+			memset(patch_header, 0, 0x2c);
+			memset(patch_header + 0x2c, ' ', 10); // load name.
+
+			segname_len = strlen(segname);
+			if (omf_lablen) {
+				patch_header_size = 0x2c + 10 + omf_lablen;
+
+				for (unsigned i = 0; i < omf_lablen; ++i) {
+					unsigned c = segname[i];
+					if (!c) break;
+					patch_header[0x2c + 10 + i] = c;
+				}
+
+			}
+			else {
+				patch_header_size = 0x2c + 10 + 1 + segname_len;
+
+				patch_header[0x2c + 10] = segname_len;
+				for (unsigned i = 0; ; ++i) {
+					unsigned c = segname[i];
+					if (!c) break;
+					patch_header[0x2c + 10 + 1 + i] = c;					
+				}
+			}
+
+			if (omf_version == 1) {
+				patch_header[0x0c] = 0x10; // init segment.
+			} else {
+				write16(patch_header, o_kind, 0x10); // init segment.
+			}
+			patch_header[o_label_length] = omf_lablen;
+			patch_header[o_number_length] = 4;
+			patch_header[o_version] = omf_version;
+			write32(patch_header, o_bank_size, 0x010000L);
+			patch_header[o_number_sex] = 0; // little-endian
+			write16(patch_header, o_displacement_name, 0x2c);
+			write16(patch_header, o_displacement_data, patch_header_size);
+
+
 
 			if (!strcasecmp(name, "ExpressLoad")) expressload = 1;
 			if (!strcasecmp(name, "~ExpressLoad")) expressload = 1;
@@ -467,9 +510,11 @@ void process_load_file(FILE *infile, FILE *outfile) {
 				expr_body_size = bytecount - disp_data;
 				xseek(infile, bytecount, SEEK_SET);
 
+
 				// overhead from 1 more segment
-				unsigned n = 10 + 16 + 42;
-				n += omf_lablen ? omf_lablen : strlen(segname) + 1;
+				unsigned n = patch_header_size + 14;
+				// n = 10 + 16 + 42;
+				//n += omf_lablen ? omf_lablen : segname_len + 1;
 
 				xseek(outfile, bytecount + n, SEEK_SET);
 				continue;
@@ -568,8 +613,6 @@ void process_obj_file(FILE *infile, FILE *outfile) {
 	seg[2] = 0;
 	seg[3] = 0;
 	seg[4] = 0;
-
-	unsigned local_omf_lablen = omf_lablen;
 
 	omf_lablen = 0;
 
@@ -859,48 +902,17 @@ void process_obj_file(FILE *infile, FILE *outfile) {
 	SPACE_FOR(1)
 	seg[seg_size++] = OMF_END;
 
-	uint32_t bytecount = seg_size; // todo - plus header size...
-	memset(patch_header, 0, sizeof(patch_header));
+	uint32_t bytecount = seg_size + patch_header_size;
 	if (omf_version == 1) {
 		write32(patch_header, o_block_count, (bytecount + 511) >> 9);
-		patch_header[0x0c] = 0x10; // init segment.
 	} else {
 		write32(patch_header, o_byte_count, bytecount);
-		write16(patch_header, o_kind, 0x10); // init segment.
 	}
 	write32(patch_header, o_length, reloc_offset - 5);
-	patch_header[o_label_length] = local_omf_lablen;
-	patch_header[o_number_length] = 4;
-	patch_header[o_version] = omf_version;
-	write32(patch_header, o_bank_size, 0x010000L);
-	patch_header[o_number_sex] = 0; // little-endian
 	write16(patch_header, o_segment_number, patch_seg);
-	write16(patch_header, o_displacement_name, 0x2c);
-
 
 	// update the lconst record.
 	write32(seg, 1, reloc_offset - 5);
-
-	memset(patch_header + 0x2c, ' ', 10); // load name.
-	unsigned n = 0;
-	if (local_omf_lablen) {
-		unsigned i;
-		for (i = 0; i < local_omf_lablen; ++i) {
-			unsigned c = segname[i];
-			if (!c) break;
-			patch_header[0x2c + 10 + i] = c;
-		}
-		while (i < local_omf_lablen) 
-			patch_header[0x2c + 10 + i++] = 0;
-		n = local_omf_lablen;
-	} else {
-		unsigned l = strlen(segname);
-		patch_header[0x2c + 10] = l;
-		memcpy(patch_header + 0x2c + 10 + 1, segname, l);
-		n = l + 1;
-	}
-	patch_header_size = 0x2c + 10 + n; 
-	write16(patch_header, o_displacement_data, patch_header_size);
 
 
 	long pos = ftell(outfile);
@@ -939,7 +951,6 @@ void process_obj_file(FILE *infile, FILE *outfile) {
 	}
 
 	free(seg);
-
 }
 
 // first segment is an expressload segment. (implies omf v2)
@@ -960,8 +971,10 @@ void process_express(FILE *infile, FILE *outfile) {
 	// uint32_t bytecount = read32(header, o_byte_count);
 
 
-	unsigned n = 10 + 16 + 42;
-	n += omf_lablen ? omf_lablen : strlen(segname) + 1;
+	//unsigned n = 10 + 16 + 42;
+	// n += omf_lablen ? omf_lablen : strlen(segname) + 1;
+
+	unsigned n = patch_header_size + 14;
 
 	body = p = xmalloc(expr_body_size + n);
 
@@ -1039,6 +1052,58 @@ void process_express(FILE *infile, FILE *outfile) {
 }
 
 
+/* The GS/OS loader has a bug...
+
+(Non-expressload)
+
+The loader makes two passes.  On the first pass, memory is allocated
+and LCONST/DS records are handled. When it finds the first relocation
+record (Super/[c]Interseg/[c]Reloc), it saves the offset and jumps to
+the next segment for processing.
+
+On the second pass, it processes all the relocation records.
+
+Except... for initialization segments.  Their reloc records are processed
+on the first pass (so all prior segments are loaded but not yet relocated).
+
+So the relocation code checks the header kind field and the pass number
+to know if it should do relocation or not.
+
+The issue is that the header kind field doesn't get reset on the second pass.
+If the last segment is an init segment, the relocations will apply to the
+body of the init segment.  This is bad -- memory corruption.  Even if nothing
+important is corrupted, the relocations aren't applied correctly so addresses
+will be incorrect.
+
+Mitigate this by generating an empty skip segment at the very end.
+
+*/
+void add_skip(FILE *outfile) {
+
+
+	if (omf_version == 1) {
+		// no such thing as a skip segment, so just call it a code segment.
+		write32(patch_header, o_block_count, 1);
+		patch_header[0x0c] = 0x00;
+	} else {
+		write32(patch_header, o_byte_count, patch_header_size + 1);
+		write16(patch_header, o_kind, 0x0200); // code + skip
+	}
+	write32(patch_header, o_length, 0);
+	write16(patch_header, o_segment_number, patch_seg + 1);
+	patch_header[patch_header_size] = OMF_END;
+
+	xwrite(outfile, patch_header, patch_header_size + 1);
+
+	if (omf_version == 1) {
+		// pad out the segment to a full block.
+		// unsigned pos = ftell(outfile); // high-bits unimportant!
+		// unsigned n = pos & 0x1ff;
+		unsigned n = 512 - patch_header_size - 1;
+		xwrite(outfile, buffer, n);
+	}
+}
+
 int main(int argc, char **argv) {
 
 	int c;
@@ -1089,6 +1154,7 @@ int main(int argc, char **argv) {
 	process_load_file(infile, outfile);
 	process_obj_file(objfile, outfile);
 	if (expressload) process_express(infile, outfile);
+	else add_skip(outfile);
 
 	fclose(infile);
 	fclose(objfile);
