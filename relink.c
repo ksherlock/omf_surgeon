@@ -446,7 +446,6 @@ void process_load_file(FILE *infile, FILE *outfile) {
 		omf_lablen = header[o_label_length];
 		if (omf_lablen > 63) errx(EX_DATAERR, "string too long");
 
-
 		if (segnum == 1) {
 			omf_version = header[o_version];
 
@@ -524,32 +523,49 @@ void process_load_file(FILE *infile, FILE *outfile) {
 		// if (omf_version == 1) bytecount *= 512;
 
 
-		// if name is printable, add it as a hash entry...
-		entry *e;
-		if (name[0]) {
-			if (insensitive) upcase_name();
+		// skip skip files and dynamic segments.
+		unsigned skip = 0;
+		unsigned kind = 0;
+		if (omf_version == 1) {
+			unsigned type = header[o_type];
+
+			kind = type & 0x1f;
+			kind |= (type & 0x0e) << 8;
+		} else {
+			kind = read16(header, o_kind);
+		}
+		// dynamic or skip segment.
+		if (kind & 0x8200) skip = 1;
+
+		if (!skip) {
+
+			// if name is printable, add it as a hash entry...
+			entry *e;
+			if (name[0]) {
+				if (insensitive) upcase_name();
+				e = find_entry(name, 0, 1);
+				e->seg = segnum;
+				e->bits = 1; // defined.
+			}
+
+			if (insensitive)
+				snprintf(name, 64, "SEG_%u", segnum);
+			else
+				snprintf(name, 64, "seg_%u", segnum);
+
 			e = find_entry(name, 0, 1);
 			e->seg = segnum;
 			e->bits = 1; // defined.
+
+			if (insensitive)
+				snprintf(name, sizeof(name), "SEG_%u_SIZE", segnum);
+			else
+				snprintf(name, sizeof(name), "seg_%u_size", segnum);
+
+			e = find_entry(name, 0, 1);
+			e->offset = read32(header, o_length);
+			e->bits = 1; // defined.
 		}
-
-		if (insensitive)
-			snprintf(name, 64, "SEG_%u", segnum);
-		else
-			snprintf(name, 64, "seg_%u", segnum);
-
-		e = find_entry(name, 0, 1);
-		e->seg = segnum;
-		e->bits = 1; // defined.
-
-		if (insensitive)
-			snprintf(name, sizeof(name), "SEG_%u_SIZE", segnum);
-		else
-			snprintf(name, sizeof(name), "seg_%u_size", segnum);
-
-		e = find_entry(name, 0, 1);
-		e->offset = read32(header, o_length);
-		e->bits = 1; // defined.
 
 
 		// back up so copy_vx will include the header as well.
