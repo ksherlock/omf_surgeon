@@ -58,6 +58,32 @@ unsigned segname_len = 0;
 
 
 
+/*
+
+- since init segments execute before relocation,
+it seems like a dead-end.
+
+instead, insert a regular segment at the start to head-patch?
+(only valid for S16 and EXEs)
+
+would need to store a/x/y but would have direct page..
+
+
+sta <0
+stx <2
+sty <4
+
+...
+
+lda <0
+ldx <2
+ldy <4
+jml SEG_1
+
+
+*/
+
+
 
 void usage(int ex) {
 	fputs(
@@ -633,7 +659,19 @@ void process_obj_file(FILE *infile, FILE *outfile) {
 	omf_lablen = 0;
 
 
-	// insert seg name into symbol table...
+
+
+	if (insensitive) {
+		entry *e = find_entry("SEGNUM", 0, 1);
+		e->bits = 1;
+		e->offset = patch_seg;
+	} else {
+		entry *e = find_entry("segnum", 0, 1);
+		e->bits = 1;
+		e->offset = patch_seg;		
+	}
+
+
 
 	current_seg_offset = 0;
 	current_pc = 0;

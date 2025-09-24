@@ -1,6 +1,3 @@
-
-
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <getopt.h>
@@ -529,62 +526,6 @@ void usage(unsigned ex) {
 	exit(ex);
 }
 
-#ifdef __ORCAC__
-#include <gsos.h>
-
-static FileInfoRecGS infoDCB = { 4 };
-
-/* ideally we would just read the info when opening, set it when creating... */
-void get_file_type(const char *path, unsigned *ftype, unsigned long *atype) {
-
-	GSString255Ptr gs = (GSString255Ptr)buffer;
-
-	unsigned l = strlen(path);
-
-	if (l+2 > sizeof(buffer)) {
-		gs = xmalloc(l + 2);
-	}
-	gs->length = l;
-	memcpy(gs->text, path, l);
-
-	infoDCB.pathname = gs;
-	GetFileInfoGS(&infoDCB);
-	if (_toolErr) {
-		errx(1, "GetFileInfoGS(%s): $%04x", path, _toolErr);
-	}
-	*ftype = infoDCB.fileType;
-	*atype = infoDCB.auxType;
-
-	if ((char *)gs != buffer) free(gs);
-}
-
-void set_file_type(const char *path, unsigned ftype, unsigned long atype) {
-
-	GSString255Ptr gs = (GSString255Ptr)buffer;
-
-	unsigned l = strlen(path);
-
-	if (l+2 > sizeof(buffer)) {
-		gs = xmalloc(l + 2);
-	}
-	gs->length = l;
-	memcpy(gs->text, path, l);
-
-	infoDCB.pathname = gs;
-	infoDCB.fileType = ftype;
-	infoDCB.auxType = atype;
-
-	SetFileInfoGS(&infoDCB);
-	if (_toolErr) {
-		errx(1, "SetFileInfoGS(%s): $%04x", path, _toolErr);
-	}
-
-	if ((char *)gs != buffer) free(gs);
-}
-
-
-
-#endif
 
 int main(int argc, char **argv) {
 
@@ -633,12 +574,12 @@ int main(int argc, char **argv) {
 	unsigned ftype;
 	unsigned long atype;
 	get_file_type(cp, &ftype, &atype);
+
 	/*
 	 * $b1: object file
 	 * $b2: library file
 	 * $b3-$be: load files.
 	 *
-	 * in the future, $b3-$be may be supported for adding a stack segment or adding an init segment.
 	 */
 
 	if (ftype != 0xb1)
