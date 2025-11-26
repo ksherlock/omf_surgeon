@@ -220,6 +220,7 @@ void prep_ht(struct seg_list *seg, unsigned star) {
 }
 
 static char name[64];
+static unsigned relative_bias;
 
 // returns the size of the expression.
 unsigned process_omf_expr(uint8_t *expr) {
@@ -237,9 +238,18 @@ unsigned process_omf_expr(uint8_t *expr) {
 		if (op < 0x81) continue;
 
 		switch(op) {
-		case 0x80: break; /* current location */
+		case 0x80: /* current location */
+			break;
 		case 0x81: /* absolute value */
+			sz += 4;
+			break;
+
 		case 0x87: /* relative offset */
+			if (relative_bias) {
+				uint32_t x = read32(expr, sz);
+				x += relative_bias;
+				write32(expr, sz, x);
+			}
 			sz += 4;
 			break;
 
@@ -352,6 +362,27 @@ void process_omf_segment(seg_list *seg) {
 
 		ptr = ptr->next;
 	}
+
+	relative_bias = 0;
+	/* add an inline procedure name? */
+	if (seg->bits & SEG_IPN) {
+
+		// todo -- allow name override?
+		unsigned n = strlen(name);
+		unsigned offset = n + 3;
+
+		scratch[0] = n + 6; // omf const
+		scratch[1] = 0x82;
+		scratch[2] = offset & 0xff;
+		scratch[3] = offset >> 8;
+		scratch[4] = 0x71;
+		scratch[5] = 0x77;
+		scratch[6] = n;
+		memcpy(scratch + 7, name, n);
+		newSize += xwrite(outfile, scratch, n + 7);
+		relative_bias = n + 6; // expressions relative to start of segment need to be adjusted.
+	}
+
 
 	// copy over the omf body.
 	// $e5 strong may be dropped and expressions may be modified.

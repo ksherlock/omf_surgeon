@@ -30,7 +30,8 @@ enum {
 	TK_ALIAS,
 	TK_DELETE,
 	TK_KIND,
-	TK_LOADNAME
+	TK_LOADNAME,
+	TK_IPN
 	// TK_TYPE,
 	// TK_CODE,
 	// TK_DATA
@@ -39,7 +40,7 @@ enum {
 
 static const char *token_names[] = {
 	"eof", ";", ",", "*", "{", "}",
-	"label", "number", "strong", "segment", "weak", "alias", "delete", "kind", "loadname"
+	"label", "number", "strong", "segment", "weak", "alias", "delete", "kind", "loadname", "ipn",
 };
 
 
@@ -58,19 +59,9 @@ int is_keyword(const char *cp) {
 	_('d', "delete", TK_DELETE);
 	_('k', "kind", TK_KIND);
 	_('l', "loadname", TK_LOADNAME);
+	_('i', "ipn", TK_IPN);
 
-#if 0
-	if (c == 's' && !strcmp(cp, "strong")) return TK_STRONG;
-	if (c == 's' && !strcmp(cp, "segment")) return TK_SEGMENT;
-	if (c == 'w' && !strcmp(cp, "weak")) return TK_WEAK;
-	if (c == 'a' && !strcmp(cp, "alias")) return TK_ALIAS;
-	if (c == 'd' && !strcmp(cp, "delete")) return TK_DELETE;
-	if (c == 'k' && !strcmp(cp, "kind")) return TK_KIND;
-	if (c == 'k')
-	// if (c == 't' && !strcmp(cp, "type")) return TK_TYPE;
-	// if (c == 'c' && !strcmp(cp, "code")) return TK_CODE;
-	// if (c == 'd' && !strcmp(cp, "data")) return TK_DATA;
-#endif
+
 	return TK_LABEL;
 }
 
@@ -283,6 +274,7 @@ struct seg_list *parse_file(FILE *f) {
 			case TK_DELETE:
 			case TK_KIND:
 			case TK_LOADNAME:
+			case TK_IPN:
 				break;
 			default:
 				expected(tk, "strong/weak/alias/delete");
@@ -312,6 +304,13 @@ struct seg_list *parse_file(FILE *f) {
 				}
 				memcpy(seg->loadname, label, 10);
 				seg->loadname[10] = 0;
+				expect_token(f, 0, TK_SEMI, 0);
+				continue;
+			}
+
+			if (tk == TK_IPN) {
+				seg->bits |= SEG_IPN;
+				/* TODO -- allow optinal name override (if not *)? */
 				expect_token(f, 0, TK_SEMI, 0);
 				continue;
 			}

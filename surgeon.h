@@ -17,6 +17,7 @@ enum {
 	SEG_DELETE = 1,
 	SEG_KIND = 2,
 	SEG_LOADNAME = 4,
+	SEG_IPN = 8,
 };
 
 

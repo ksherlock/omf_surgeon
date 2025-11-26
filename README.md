@@ -24,6 +24,7 @@ statement     ::= alias_stmt
                 | weak_stmt
                 | kind_stmt
                 | loadname_stmt
+                | inline_name_stmt
                 ;
 
 alias_stmt    ::= 'alias' label_list ';' ;
@@ -32,7 +33,7 @@ kind_stmt     ::= 'kind' number ';' ;
 loadname_stmt ::= 'loadname' label ';' ;
 strong_stmt   ::= 'strong' label_list ';' ;
 weak_stmt     ::= 'weak' label_list ';' ;
-
+ipn_stmt      ::= 'ipn' ';'
 
 label         ::= [A-Za-z_~][A-Za-z0-9_~]* | '"' [^"]+ '"' ;
 label_list    ::= label [ ',' label ]* ;
@@ -57,6 +58,8 @@ number        ::= '$' [0-9A-F]+ | '%' [01][01_]* | [0-9]+  ;
 * `kind` will set the segment header kind field.
 
 * `loadname` will set the segment header loadname field (padded with ' ' to 10 characters).
+
+* `ipn` will add an inline procedure name. (see IIgs technote #103)
 
 
 
